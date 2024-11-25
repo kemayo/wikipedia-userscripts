@@ -44,7 +44,8 @@ ImageCaptionEditCheck.prototype.act = function ( choice, action ) {
 	}
 };
 
-// Upstream
+// Everything below this line is helpers that're going to get upstreamed into the core edit check code:
+
 ImageCaptionEditCheck.prototype.findAddedElements = function ( diff, type ) {
 	const documentModel = diff.documentModel;
 	const matchedNodes = [];
@@ -59,7 +60,6 @@ ImageCaptionEditCheck.prototype.findAddedElements = function ( diff, type ) {
 	return matchedNodes;
 };
 
-// Upstream this? It's getting *all* the modified ranges, not the upstream version which is just the content-ranges
 ImageCaptionEditCheck.prototype.getAllModifiedRangesFromDiff = function ( diff ) {
 	const documentModel = diff.documentModel;
 	if ( !documentModel.completeHistory.getLength() ) {
