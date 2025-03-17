@@ -5,7 +5,14 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 
 	// This will run every time a new topic / reply is opened
 
-	if ( !ve.ui.toolFactory.registry.PingAllTool ) {
+	if ( !ve.ui.toolFactory.lookup( 'pingAll' ) ) {
+		/**
+		 * Define all the pieces needed for a toolbar button:
+		 * * a Tool, which goes on the toolbar
+		 * * an Action, which does the work
+		 * * a Command, which connects the Tool and the Action
+		 */
+
 		// Tool
 
 		function PingAllTool() {
@@ -82,6 +89,7 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 		// Command
 
 		const command = new ve.ui.Command(
+			// commandName, actionName, actionMethod, restrictions
 			'insertAllPings', PingAllAction.static.name, 'insert',
 			{ supportedSelections: [ 'linear' ] }
 		);
