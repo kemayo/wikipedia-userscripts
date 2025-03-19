@@ -32,9 +32,14 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 			// Parent method
 			PingAllTool.super.prototype.onUpdateState.apply( this, arguments );
 
-			const authors = this.toolbar.getSurface() ? this.toolbar.getSurface().authors : [];
+			if ( this.isDisabled() ) {
+				return;
+			}
 
-			this.setDisabled( !authors.some( ( author ) => author.username !== mw.user.getName() ) );
+			const authors = this.toolbar.getSurface() ? this.toolbar.getSurface().authors : [];
+			const hasOtherAuthors = authors.some( ( author ) => author.username !== mw.user.getName() );
+
+			this.setDisabled( !hasOtherAuthors );
 		};
 
 
