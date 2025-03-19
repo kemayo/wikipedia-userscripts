@@ -52,23 +52,21 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 		PingAllAction.static.methods = [ 'insert' ];
 
 		PingAllAction.prototype.insert = function () {
-			const surfaceModel = this.surface.getModel(),
-				fragment = surfaceModel.getFragment();
-
-			const prefix = mw.msg( 'discussiontools-replywidget-mention-prefix' ),
-				suffix = mw.msg( 'discussiontools-replywidget-mention-suffix' );
-
+			const fragment = this.surface.getModel().getFragment();
 			const content = [];
-			this.surface.authors.forEach( ( author, i ) => {
-				if ( author.username === mw.user.getName() ) {
-					return;
-				}
-				const title = mw.Title.newFromText( author.username, mw.config.get( 'wgNamespaceIds' ).user );
+
+			this.authors.forEach( ( author, i ) => {
 				if ( i > 0 ) {
-					content.push( ', ' );
+					content.push( ',', ' ' );
 				}
 				if ( this.surface.getMode() === 'source' ) {
-					content.push( prefix + '[[' + title.getPrefixedText() + '|' + author.username + ']]' + suffix );
+					// This isn't strictly necessary, as the surface would
+					// convert the visual-data version via an API call.
+					// However, building the wikitext avoids the delay.
+					const prefix = mw.msg( 'discussiontools-replywidget-mention-prefix' ),
+						suffix = mw.msg( 'discussiontools-replywidget-mention-suffix' ),
+						title = mw.Title.newFromText( author.username, mw.config.get( 'wgNamespaceIds' ).user );
+					content.push.apply( content, ( prefix + '[[' + title.getPrefixedText() + '|' + author.username + ']]' + suffix ).split( '' ) );
 				} else {
 					content.push(
 						{ type: 'mwPing', attributes: { user: author.username } },
