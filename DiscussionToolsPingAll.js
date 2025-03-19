@@ -34,7 +34,7 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 
 			const authors = this.toolbar.getSurface() ? this.toolbar.getSurface().authors : [];
 
-			this.setDisabled( authors.filter( ( author ) => author.username !== mw.user.getName() ).length === 0 );
+			this.setDisabled( !authors.some( ( author ) => author.username !== mw.user.getName() ) );
 		};
 
 
