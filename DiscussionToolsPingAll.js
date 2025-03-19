@@ -50,7 +50,7 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 		function PingAllAction() {
 			PingAllAction.super.apply( this, arguments );
 
-			this.authors = this.surface.authors.filter( ( author ) => author.username !== mw.user.getName() );
+			this.authors = ( this.surface.authors || []).filter( ( author ) => author.username !== mw.user.getName() );
 		}
 
 		OO.inheritClass( PingAllAction, ve.ui.Action );
