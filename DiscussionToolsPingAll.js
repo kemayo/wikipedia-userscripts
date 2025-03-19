@@ -59,7 +59,9 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 		PingAllAction.static.methods = [ 'insert' ];
 
 		PingAllAction.prototype.insert = function () {
-			const fragment = this.surface.getModel().getFragment();
+			// We're going to be setting the selection ourselves at the end of
+			// this, so turning off autoselect avoids unnecessary updates.
+			const fragment = this.surface.getModel().getFragment().setAutoSelect( false );
 			const content = [];
 
 			this.authors.forEach( ( author, i ) => {
@@ -67,9 +69,9 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 					content.push( ',', ' ' );
 				}
 				if ( this.surface.getMode() === 'source' ) {
-					// This isn't strictly necessary, as the surface would
-					// convert the visual-data version via an API call.
-					// However, building the wikitext avoids the delay.
+					// This isn't necessary, as the surface would convert the
+					// visual-data version via an API call. However, building
+					// the wikitext avoids the delay.
 					const prefix = mw.msg( 'discussiontools-replywidget-mention-prefix' ),
 						suffix = mw.msg( 'discussiontools-replywidget-mention-suffix' ),
 						title = mw.Title.newFromText( author.username, mw.config.get( 'wgNamespaceIds' ).user );
@@ -83,7 +85,18 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 			} );
 			if ( content.length > 0 ) {
 				fragment.insertContent( content );
-				fragment.collapseToEnd().select();
+				// This is only *really* needed for source mode *if* we remove
+				// the wikitext-building above, because the conversion is
+				// async. It's good practice in case something else comes up
+				// in the future, however.
+				fragment.getPending().then( () => {
+					fragment.collapseToEnd().select();
+					// HACK: The conversion pending dialog in source mode
+					// steals focus. Wait for it to close.
+					setTimeout( () => {
+						this.surface.getView().focus();
+					}, 250 );
+				} );
 				return true;
 			}
 			return false;
