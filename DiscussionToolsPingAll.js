@@ -25,7 +25,7 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 		PingAllTool.static.commandName = 'insertAllPings';
 		PingAllTool.static.name = 'pingAll';
 		PingAllTool.static.icon = 'userGroup';
-		PingAllTool.static.title = OO.ui.deferMsg( 'discussiontools-replywidget-mention-tool-title' );
+		PingAllTool.static.title = "Mention all users in this discussion";
 		PingAllTool.static.autoAddToCatchall = false;
 
 		PingAllTool.prototype.onUpdateState = function () {
