@@ -1,4 +1,8 @@
-mw.hook( 've.activationComplete' ).add( function () {
+mw.hook( 've.newTarget' ).add( function ( target ) {
+
+if ( target.constructor.static.name !== 'article' ) {
+	return;
+}
 
 if ( !mw.editcheck ) {
 	// console.log("Not loading ImageAlt editcheck: editcheck isn't loaded");
