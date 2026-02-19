@@ -333,7 +333,7 @@
 		const newImg = await blobToImage( imageBlob );
 		canvas.replaceWith( scaleElement( newImg ) );
 
-		modal.showShareButtons( mw.config.get( 'wgTitle' ), location.href, imageBlob );
+		modal.showShareButtons( mw.config.get( 'wgTitle' ), location.href, selectedText, imageBlob );
 	}
 
 	// Preview modal
@@ -419,7 +419,7 @@
 			card.appendChild( canvas );
 		};
 
-		backdrop.showShareButtons = async ( title, url, imageBlob ) => {
+		backdrop.showShareButtons = async ( title, url, text, imageBlob ) => {
 			const copyButton = document.createElement( 'button' );
 			copyButton.innerHTML = copyIcon + ' Copy this image';
 			copyButton.addEventListener( 'click', async ( e ) => {
@@ -439,7 +439,7 @@
 			shareButton.addEventListener( 'click', async ( e ) => {
 				e.preventDefault();
 				try {
-					const shareData = { title, url, files: [ new File( [ imageBlob ], 'wikipedia-share.png', { type: 'image/png' } ) ] };
+					const shareData = { title, url, text, files: [ new File( [ imageBlob ], 'wikipedia-share.png', { type: 'image/png' } ) ] };
 					// Fall back gracefully if file sharing isn't supported
 					if ( !( navigator.canShare && navigator.canShare( shareData ) ) ) {
 						delete shareData.files;
