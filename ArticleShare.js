@@ -505,7 +505,7 @@
 			boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
 			whiteSpace: 'nowrap',
 			userSelect: 'none',
-			cursor: 'default',
+			cursor: 'pointer',
 			pointerEvents: 'auto'
 		} );
 
@@ -588,7 +588,7 @@
 	function init() {
 		mw.loader.enqueue( [ 'mediawiki.api', 'mediawiki.util', 'mediawiki.notification' ], () => {
 			// mouseup rather than selectionchange to avoid showing it while someone is dragging
-			document.addEventListener( 'selectionchange', mw.util.debounce( showPopup, 50 ) );
+			document.addEventListener( 'selectionchange', mw.util.debounce( showPopup, 250 ) );
 
 			// Hide popup on scroll / new click elsewhere
 			document.addEventListener( 'mousedown', function ( e ) {
