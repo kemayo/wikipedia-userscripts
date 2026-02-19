@@ -80,9 +80,12 @@
 	 * @param {number} y Baseline of the first line
 	 * @param {number} maxWidth Maximum line width in pixels
 	 * @param {number} lineHeight Vertical distance between baselines
-	 * @returns {number} Total height from y to the bottom of the last line
+	 * @returns {number} Total height of drawn lines
 	 */
 	function drawWrappedText( ctx, text, x, y, maxWidth, lineHeight, maxHeight = Infinity ) {
+		if ( lineHeight > maxHeight ) {
+			return;
+		}
 		ctx.save();
 		// Needed or the return is meaningless:
 		ctx.textBaseline = 'top';
@@ -91,6 +94,7 @@
 		const lines = [];
 		let line = '';
 
+		// Work out what the lines are:
 		for ( const word of words ) {
 			const candidate = line ? line + ' ' + word : word;
 			if ( ctx.measureText( candidate ).width <= maxWidth ) {
@@ -106,28 +110,28 @@
 			lines.push(line);
 		}
 
+		// Cut down the number of lines if we need to:
+		let truncated;
+		while ( ( lines.length * lineHeight ) > maxHeight ) {
+			truncated = lines.pop();
+		}
+		if ( truncated ) {
+			// truncate the final line
+			while ( truncated && ctx.measureText(truncated + '\u2026' ).width > maxWidth) {
+				truncated = truncated.slice( 0, truncated.lastIndexOf( ' ' ) );
+			}
+			lines.push( truncated.replace(/[\.,?!]*$/, '') + '\u2026' );
+		}
+
+		// Finally draw the lines
 		let currentY = y;
-		for ( let i = 0; i < lines.length; i++ ) {
-			const isLast = i === lines.length - 1;
-			const wouldExceedHeight = ( currentY - y + lineHeight ) > maxHeight;
-
-			if ( !isLast && wouldExceedHeight ) {
-				let truncated = lines[i];
-				while ( truncated && ctx.measureText(truncated + '\u2026' ).width > maxWidth) {
-					truncated = truncated.slice( 0, truncated.lastIndexOf( ' ' ) );
-				}
-				ctx.fillText( truncated.replace(/[\.,?!]*$/, '') + '\u2026', x, currentY );
-				break;
-			}
-
-			ctx.fillText( lines[i], x, currentY );
-			if ( !isLast ) {
-				currentY += lineHeight;
-			}
+		for ( line of lines ) {
+			ctx.fillText( line, x, currentY );
+			currentY += lineHeight;
 		}
 
 		ctx.restore();
-		return ( currentY - y ) || lineHeight;
+		return lines.length * lineHeight;
 	}
 
 	/**
@@ -213,7 +217,7 @@
 		ctx.fillStyle = randomLegacyColor();
 		ctx.font = titleFont( 72 );
 		ctx.globalAlpha = 0.25;
-		ctx.fillText( '\u201c', 26, cursor - 8 );
+		ctx.fillText( '\u201c', 26, cursor + 44 );
 		ctx.globalAlpha = 1;
 
 		ctx.fillStyle = '#000000'; // black
@@ -224,7 +228,7 @@
 		const articleUrl = location.origin + mw.util.getUrl( title );
 		ctx.fillStyle = '#7F7F7F'; // black50
 		ctx.font = '18px sans-serif';
-		ctx.fillText( articleUrl, 36, H - 28 );
+		ctx.fillText( articleUrl, 36, H - 6 );
 
 		return canvas;
 	}
