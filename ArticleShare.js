@@ -333,7 +333,12 @@
 		const newImg = await blobToImage( imageBlob );
 		canvas.replaceWith( scaleElement( newImg ) );
 
-		modal.showShareButtons( mw.config.get( 'wgTitle' ), location.href, selectedText, imageBlob );
+		modal.showShareButtons(
+			mw.config.get( 'wgTitle' ),
+			location.origin + mw.util.getUrl( mw.config.get( 'wgTitle' ) ),
+			selectedText,
+			imageBlob
+		);
 	}
 
 	// Preview modal
