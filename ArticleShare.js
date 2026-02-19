@@ -68,7 +68,7 @@
 	}
 
 	function addStyle( element, styles ) {
-
+		Object.assign( element.style, styles );
 	}
 
 	/**
@@ -294,7 +294,7 @@
 		const dispW = Math.round( element.width * scale );
 		const dispH = Math.round( element.height * scale );
 
-		Object.assign( element.style, {
+		addStyle( element, {
 			width: dispW + 'px',
 			height: dispH + 'px',
 			borderRadius: '4px',
@@ -349,7 +349,7 @@
 
 		// Card
 		const card = document.createElement( 'div' );
-		Object.assign( card.style, {
+		addStyle( card, {
 			background: '#fff',
 			border: '1px solid #a2a9b1',
 			borderRadius: '8px',
@@ -367,7 +367,7 @@
 		// Backdrop
 		const backdrop = document.createElement( 'div' );
 		backdrop.id = 'mw-share-modal-backdrop';
-		Object.assign( backdrop.style, {
+		addStyle( backdrop, {
 			position: 'fixed', inset: '0',
 			background: 'rgba(0,0,0,0.45)',
 			zIndex: 9998,
@@ -383,7 +383,7 @@
 
 		// Loading state (shown first)
 		const loadingRow = document.createElement( 'div' );
-		Object.assign( loadingRow.style, {
+		addStyle( loadingRow, {
 			display: 'flex', alignItems: 'center', gap: '12px',
 			fontSize: '15px', color: '#202122',
 			padding: '12px 0'
@@ -405,7 +405,7 @@
 
 			// Label
 			const label = document.createElement( 'p' );
-			Object.assign( label.style, {
+			addStyle( label, {
 				margin: '0',
 				fontSize: '13px',
 				color: '#54595d',
@@ -493,7 +493,7 @@
 		const popup = document.createElement( 'div' );
 		popup.id = 'mw-share-selection-popup';
 
-		Object.assign( popup.style, {
+		addStyle( popup, {
 			position: 'absolute',
 			zIndex: 9998,
 			background: '#202122',
@@ -511,7 +511,7 @@
 
 		// Tiny caret / tooltip arrow
 		const arrow = document.createElement( 'span' );
-		Object.assign( arrow.style, {
+		addStyle( arrow, {
 			position: 'absolute',
 			bottom: '-6px',
 			left: '50%',
