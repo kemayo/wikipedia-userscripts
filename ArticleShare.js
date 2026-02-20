@@ -338,84 +338,73 @@
 			: getArticleExcerpt();
 
 		// Show the preview modal (starts in loading state)
-		const modal = createPreviewModal();
-		document.body.appendChild( modal );
-
-		// Fetch image first, then draw canvas synchronously so preview
-		// appears as soon as pixels are ready — before toBlob() runs.
-		const articleImage = await fetchArticleImage();
-		const logoImage = await fetchLogoImage();
-
-		modal.buildShareImage( bodyText, articleImage, logoImage );
+		getShareDialog().buildShareImage(
+			bodyText,
+			await fetchArticleImage(),
+			await fetchLogoImage()
+		);
 	}
 
 	// Preview modal
-
-	function createPreviewModal() {
+	let dialog
+	function getShareDialog( bodyText, articleImage, logoImage ) {
 		// Inject keyframe animation once
 		if ( !document.getElementById( 'mw-share-spin-style' ) ) {
 			const style = document.createElement( 'style' );
 			style.id = 'mw-share-spin-style';
 			style.textContent = '@keyframes mw-share-spin{to{transform:rotate(360deg)}}';
 			document.head.appendChild( style );
-		}
 
-		// Card
-		const card = document.createElement( 'div' );
-		addStyle( card, {
-			background: '#fff',
-			border: '1px solid #a2a9b1',
-			borderRadius: '8px',
-			boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
-			padding: '20px',
-			maxWidth: '90vw',
-			maxHeight: '90vh',
-			display: 'flex',
-			flexDirection: 'column',
-			alignItems: 'center',
-			gap: '14px',
-			overflow: 'hidden'
-		} );
+			dialog = document.createElement( 'dialog' );
+			dialog.closedBy = 'any';
+			addStyle( dialog, {
+				background: '#fff',
+				border: '1px solid #a2a9b1',
+				borderRadius: '8px',
+				boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+				padding: '20px',
+				maxWidth: '90vw',
+				maxHeight: '90vh',
+			} );
 
-		// Backdrop
-		const backdrop = document.createElement( 'div' );
-		backdrop.id = 'mw-share-modal-backdrop';
-		addStyle( backdrop, {
-			position: 'fixed', inset: '0',
-			background: 'rgba(0,0,0,0.45)',
-			zIndex: 9998,
-			display: 'flex', alignItems: 'center', justifyContent: 'center'
-		} );
+			const close = document.createElement( 'button' );
+			close.innerText = 'X';
+			addStyle( close, {
+				position: 'absolute',
+				top: '0', right: '0'
+			} );
+			close.addEventListener( 'click', ( e ) => {
+				e.preventDefault();
+				dialog.close();
+			} )
+			dialog.appendChild( close );
 
-		backdrop.addEventListener( 'click', ( e ) => {
-			e.preventDefault();
-			if ( !card.contains( e.target ) ) {
-				backdrop.remove();
-			}
-		} );
+			document.body.appendChild( dialog );
 
-		// Loading state (shown first)
-		const loadingRow = document.createElement( 'div' );
-		addStyle( loadingRow, {
-			display: 'flex', alignItems: 'center', gap: '12px',
-			fontSize: '15px', color: '#202122',
-			padding: '12px 0'
-		} );
-		loadingRow.innerHTML =
-			'<span style="display:inline-block;width:20px;height:20px;'
-			+ 'border:3px solid #3366cc;border-top-color:transparent;'
-			+ 'border-radius:50%;animation:mw-share-spin 0.7s linear infinite;'
-			+ 'flex-shrink:0"></span>'
-			+ ' Preparing share\u2026';
-		card.appendChild( loadingRow );
+			// Loading state (shown first)
+			const loadingRow = document.createElement( 'div' );
+			addStyle( loadingRow, {
+				display: 'flex', alignItems: 'center', gap: '12px',
+				fontSize: '15px', color: '#202122',
+				padding: '12px 0'
+			} );
+			loadingRow.innerHTML =
+				'<span style="display:inline-block;width:20px;height:20px;'
+				+ 'border:3px solid #3366cc;border-top-color:transparent;'
+				+ 'border-radius:50%;animation:mw-share-spin 0.7s linear infinite;'
+				+ 'flex-shrink:0"></span>'
+				+ ' Preparing image\u2026';
+			dialog.appendChild( loadingRow );
 
-		backdrop.appendChild( card );
-
-		backdrop.buildShareImage = async ( bodyText, articleImage, logoImage, wide ) => {
-			const canvas = drawShareCanvas( bodyText, articleImage, logoImage, wide );
-
-			// Swap spinner for the rendered canvas preview
-			card.innerHTML = '';
+			const content = document.createElement( 'div' );
+			addStyle( content, {
+				display: 'flex',
+				flexDirection: 'column',
+				alignItems: 'center',
+				gap: '14px',
+				overflow: 'hidden'
+			} );
+			content.style.display = 'none';
 
 			// Label
 			const label = document.createElement( 'p' );
@@ -432,73 +421,88 @@
 				action.addEventListener( 'click', ( e ) => {
 					e.stopPropagation();
 					e.preventDefault();
-					backdrop.buildShareImage( bodyText, articleImage, logoImage, modeArg );
+					dialog.buildShareImage( dialog.data.bodyText, dialog.data.articleImage, dialog.data.logoImage, modeArg );
 				} );
 				label.appendChild( action );
 			} );
-			card.appendChild( label );
+			content.appendChild( label );
+			const imageContainer = document.createElement( 'div' );
+			content.appendChild( imageContainer );
 
-			scaleElement( canvas );
-
-			card.appendChild( canvas );
-
-			// Convert to Blob (slightly async) in parallel with the user
-			// reading the preview
-			const imageBlob = await canvasToBlob( canvas );
-
-			const newImg = await blobToImage( imageBlob );
-			canvas.replaceWith( scaleElement( newImg ) );
-
-			backdrop.showShareButtons(
-				mw.config.get( 'wgTitle' ),
-				location.origin + mw.util.getUrl( mw.config.get( 'wgTitle' ) ),
-				bodyText,
-				imageBlob
-			);
-		}
-
-		backdrop.showShareButtons = async ( title, url, text, imageBlob ) => {
 			const buttons = document.createElement( 'div' );
+			content.appendChild( buttons );
 
-			const copyButton = document.createElement( 'button' );
-			copyButton.innerHTML = copyIcon + ' Copy this image';
-			copyButton.addEventListener( 'click', async ( e ) => {
-				e.preventDefault();
-				const clipboardItem = new ClipboardItem( {
-					[ imageBlob.type ]: imageBlob
-				} );
-				await navigator.clipboard.write( [ clipboardItem ] );
-				mw.notify( 'Copied image to the clipboard' );
-			} );
-			buttons.appendChild( copyButton );
-			if ( navigator.share ) {
-				const shareButton = document.createElement( 'button' );
-				shareButton.innerHTML = shareIcon + ' Share this image';
-				shareButton.addEventListener( 'click', async ( e ) => {
-					e.stopPropagation();
-					e.preventDefault();
-					try {
-						const shareData = { title, url, text, files: [ new File( [ imageBlob ], 'wikipedia-share.png', { type: 'image/png' } ) ] };
-						// Fall back gracefully if file sharing isn't supported
-						if ( !( navigator.canShare && navigator.canShare( shareData ) ) ) {
-							delete shareData.files;
-						}
-						await navigator.share( shareData );
-					} catch ( e ) {
-						if ( e.name !== 'AbortError' ) {
-							mw.notify( 'Could not share: ' + e.message, { type: 'error' } );
-						}
-					} finally {
-						backdrop.remove();
-					}
-				} );
-				buttons.appendChild( shareButton );
+			dialog.appendChild( content );
+
+			dialog.buildShareImage = async ( bodyText, articleImage, logoImage, wide ) => {
+				dialog.data = { bodyText, articleImage, logoImage };
+
+				loadingRow.style.display = '';
+				const canvas = drawShareCanvas( bodyText, articleImage, logoImage, wide );
+				loadingRow.style.display = 'none';
+
+				content.style.display = 'flex';
+
+				imageContainer.innerHTML = '';
+				scaleElement( canvas );
+				imageContainer.appendChild( canvas );
+
+				// Convert to Blob (slightly async) in parallel with the user
+				// reading the preview
+				const imageBlob = await canvasToBlob( canvas );
+				const newImg = await blobToImage( imageBlob );
+
+				canvas.replaceWith( scaleElement( newImg ) );
+
+				dialog.showShareButtons(
+					mw.config.get( 'wgTitle' ),
+					location.origin + mw.util.getUrl( mw.config.get( 'wgTitle' ) ),
+					bodyText,
+					imageBlob
+				);
 			}
 
-			card.appendChild( buttons );
+			dialog.showShareButtons = async ( title, url, text, imageBlob ) => {
+				buttons.innerHTML = '';
+
+				const copyButton = document.createElement( 'button' );
+				copyButton.innerHTML = copyIcon + ' Copy this image';
+				copyButton.addEventListener( 'click', async ( e ) => {
+					e.preventDefault();
+					const clipboardItem = new ClipboardItem( {
+						[ imageBlob.type ]: imageBlob
+					} );
+					await navigator.clipboard.write( [ clipboardItem ] );
+					mw.notify( 'Copied image to the clipboard' );
+				} );
+				buttons.appendChild( copyButton );
+				if ( navigator.share ) {
+					const shareButton = document.createElement( 'button' );
+					shareButton.innerHTML = shareIcon + ' Share this image';
+					shareButton.addEventListener( 'click', async ( e ) => {
+						e.stopPropagation();
+						e.preventDefault();
+						try {
+							const shareData = { title, url, text, files: [ new File( [ imageBlob ], 'wikipedia-share.png', { type: 'image/png' } ) ] };
+							// Fall back gracefully if file sharing isn't supported
+							if ( !( navigator.canShare && navigator.canShare( shareData ) ) ) {
+								delete shareData.files;
+							}
+							await navigator.share( shareData );
+						} catch ( e ) {
+							if ( e.name !== 'AbortError' ) {
+								mw.notify( 'Could not share: ' + e.message, { type: 'error' } );
+							}
+						}
+					} );
+					buttons.appendChild( shareButton );
+				}
+			}
 		}
 
-		return backdrop;
+		dialog.showModal();
+
+		return dialog;
 	}
 
 	// Persistent share link
