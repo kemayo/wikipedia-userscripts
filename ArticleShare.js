@@ -303,7 +303,7 @@
 	 * Get a plain-text excerpt from the article's lead paragraph.
 	 */
 	function getArticleExcerpt() {
-		const paras = document.querySelectorAll( '#mw-content-text .mw-parser-output > p' );
+		const paras = document.querySelectorAll( '#mw-content-text .mw-parser-output > p, #mw-content-text section > p' );
 		for ( const p of paras ) {
 			const text = p.textContent.trim();
 			if ( text.length > 80 ) {
@@ -519,11 +519,37 @@
 			'mw-share-page-link',
 			'Share this article'
 		);
-		$( node ).on( 'click', function ( e ) {
-			e.preventDefault();
-			doShare();
-		} );
-		// .find( 'a' ).prepend( $( shareIcon ) );
+		if ( node ) {
+			node.addEventListener( 'click', function ( e ) {
+				e.preventDefault();
+				doShare();
+			} );
+			// .find( 'a' ).prepend( $( shareIcon ) );
+		}
+
+		const mobileOverflow = document.querySelector( '#page-actions-overflow .page-actions-overflow-list' );
+		if ( mobileOverflow ) {
+			const item = document.createElement( 'li' );
+			item.classList.add( 'toggle-list-item' );
+			const link = document.createElement( 'a' );
+			link.classList.add( 'toggle-list-item__anchor' );
+			link.href = '#';
+			// link.innerText = 'Share';
+			link.addEventListener( 'click', ( e ) => {
+				e.preventDefault();
+				doShare();
+			} );
+			const icon = document.createElement( 'span' );
+			icon.classList.add( 'minerva-icon', 'minerva-icon--share' );
+			const text = document.createElement( 'span' );
+			text.classList.add( 'toggle-list-item__label' );
+			text.innerText = 'Share',
+
+			link.appendChild( icon );
+			link.appendChild( text );
+			item.appendChild( link );
+			mobileOverflow.appendChild( item );
+		}
 	}
 
 	// Selection-based contextual popup
