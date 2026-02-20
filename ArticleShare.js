@@ -216,7 +216,7 @@
 
 		ctx.strokeStyle = 'white';
 
-		const drawText = ( wide && articleImage ) ? drawPlainText : drawOutlinedText;
+		const drawText = ( wide || !articleImage ) ? drawPlainText : drawOutlinedText;
 
 		// Article title
 		const title = mw.config.get( 'wgTitle' );
