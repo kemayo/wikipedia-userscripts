@@ -102,9 +102,6 @@
 		if ( lineHeight > maxHeight ) {
 			return;
 		}
-		ctx.save();
-		// Needed or the return is meaningless:
-		ctx.textBaseline = 'top';
 
 		const words = text.split( ' ' );
 		const lines = [];
@@ -126,21 +123,24 @@
 			lines.push(line);
 		}
 
-		// Cut down the number of lines if we need to:
-		let truncated;
-		while ( ( lines.length * lineHeight ) > maxHeight ) {
-			truncated = lines.pop();
-		}
-		if ( truncated ) {
-			// truncate the final line
-			while ( truncated && ctx.measureText(truncated + '\u2026' ).width > maxWidth) {
-				truncated = truncated.slice( 0, truncated.lastIndexOf( ' ' ) );
+		// Cut down the number of lines if we need to, but always output at least one line
+		if ( lines.length > 1 && lines.length * lineHeight > maxHeight ) {
+			lines.length = Math.max( 1, Math.floor( maxHeight / lineHeight ) );
+			// the final line needs to be trimmed to show it was cut off
+			let lastLine = lines.pop();
+			while ( lastLine && ctx.measureText(lastLine + '\u2026' ).width > maxWidth) {
+				lastLine = lastLine.slice( 0, lastLine.lastIndexOf( ' ' ) );
 			}
-			lines.push( truncated.replace(/[\.,?!]*$/, '') + '\u2026' );
+			lines.push( lastLine.replace(/[\.,?!]*$/, '') + '\u2026' );
 		}
 
 		// Finally draw the lines
-		let currentY = y;
+		ctx.save();
+		// textBaseline is inconsistent between browsers. textBaseline=top is
+		// most consistent with what we're doing, but Safari renders the text
+		// noticeably further down with it.
+		ctx.textBaseline = 'alphabetic';
+		let currentY = y + lineHeight;
 		for ( line of lines ) {
 			drawText( ctx, line, x, currentY );
 			currentY += lineHeight;
