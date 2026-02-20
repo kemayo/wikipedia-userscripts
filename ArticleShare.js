@@ -71,6 +71,22 @@
 		Object.assign( element.style, styles );
 	}
 
+	function drawOutlinedText( ctx, text, x, y ) {
+		ctx.save();
+		ctx.strokeStyle = 'black';
+		ctx.fillStyle = 'white';
+		ctx.lineWidth = 4;
+		ctx.lineJoin = 'round';
+		ctx.miterLimit = 2;
+		ctx.strokeText( text, x, y );
+		ctx.fillText( text, x, y );
+		ctx.restore();
+	}
+
+	function drawPlainText( ctx, text, x, y ) {
+		ctx.fillText( text, x, y );
+	}
+
 	/**
 	 * Draw word-wrapped text onto a canvas context.
 	 *
@@ -82,7 +98,7 @@
 	 * @param {number} lineHeight Vertical distance between baselines
 	 * @returns {number} Total height of drawn lines
 	 */
-	function drawWrappedText( ctx, text, x, y, maxWidth, lineHeight, maxHeight = Infinity ) {
+	function drawWrappedText( ctx, text, x, y, maxWidth, lineHeight, maxHeight = Infinity, drawText = drawPlainText ) {
 		if ( lineHeight > maxHeight ) {
 			return;
 		}
@@ -126,7 +142,7 @@
 		// Finally draw the lines
 		let currentY = y;
 		for ( line of lines ) {
-			ctx.fillText( line, x, currentY );
+			drawText( ctx, line, x, currentY );
 			currentY += lineHeight;
 		}
 
@@ -136,19 +152,22 @@
 
 	/**
 	 * Draw the share card onto a canvas synchronously.
-	 * @param {string} bodyText  – selected text or article excerpt
+	 * @param {string} bodyText selected text or article excerpt
 	 * @param {HTMLImageElement|null} articleImage
 	 * @param {HTMLImageElement|null} logoImage
+	 * @param {boolean} wide Whether to be a wide image
 	 * @returns {HTMLCanvasElement}
 	 */
-	function drawShareCanvas( bodyText, articleImage, logoImage ) {
-		const W = 1200, H = 630;
+	function drawShareCanvas( bodyText, articleImage, logoImage, wide ) {
+		const W = wide ? 1200 : 630, H = 630;
 		const canvas = document.createElement( 'canvas' );
 		canvas.width = W;
 		canvas.height = H;
 		const ctx = canvas.getContext( '2d' );
 
 		const titleFont = ( size = 44 ) => `bold ${size}px 'Linux Libertine','Georgia','Times','Source Serif 4',serif`;
+
+		const logoFitHeight = 40
 
 		// Background
 		ctx.fillStyle = '#ffffff';
@@ -159,29 +178,30 @@
 		ctx.fillRect( 0, 0, 14, H );
 
 		// Image panel (right 40%)
-		const imgPanelX = Math.round( W * 0.58 );
+		const imgPanelX = wide ? Math.round( W * 0.58 ) : 14;
 		const imgPanelW = W - imgPanelX;
+		const imgPanelY = wide ? 0 : ( 16 + logoFitHeight + 4 );
+		const imgPanelH = H - imgPanelY;
 
 		if ( articleImage ) {
 			// Cover-fit image into right panel
 			const scale = Math.max( imgPanelW / articleImage.width, H / articleImage.height );
 			const sw = imgPanelW / scale;
-			const sh = H / scale;
+			const sh = imgPanelH / scale;
 			const sx = ( articleImage.width - sw ) / 2;
 			const sy = ( articleImage.height - sh ) / 2;
 
 			ctx.save();
 			ctx.beginPath();
-			ctx.rect( imgPanelX, 0, imgPanelW, H );
+			ctx.rect( imgPanelX, imgPanelY, imgPanelW, imgPanelH );
 			ctx.clip();
-			ctx.drawImage( articleImage, sx, sy, sw, sh, imgPanelX, 0, imgPanelW, H );
+			ctx.drawImage( articleImage, sx, sy, sw, sh, imgPanelX, imgPanelY, imgPanelW, imgPanelH );
 			ctx.restore();
 		}
 
 		// Logo in top-left
 		if ( logoImage ) {
-			const fitToHeight = 40
-			const scale = fitToHeight / logoImage.height;
+			const scale = logoFitHeight / logoImage.height;
 			ctx.drawImage( logoImage, 16, 16, logoImage.width * scale, logoImage.height * scale );
 		} else {
 			// placeholder circle or suchlike? this is probably an unusual case anyway...
@@ -192,11 +212,15 @@
 
 		let cursor = 70;
 
+		ctx.strokeStyle = 'white';
+
+		const drawText = ( wide && articleImage ) ? drawPlainText : drawOutlinedText;
+
 		// Article title
 		const title = mw.config.get( 'wgTitle' );
 		ctx.fillStyle = '#000000';
 		ctx.font = titleFont();
-		const textAreaW = ( articleImage ? imgPanelX : W ) - 36 - 36;
+		const textAreaW = ( ( articleImage && wide ) ? imgPanelX : W ) - 36 - 36;
 
 		// Shrink font if title is long
 		let attemptedSize = 44;
@@ -204,7 +228,7 @@
 			attemptedSize -= 2;
 			ctx.font = titleFont( attemptedSize );
 		}
-		cursor += drawWrappedText( ctx, title, 36, cursor, textAreaW, attemptedSize );
+		cursor += drawWrappedText( ctx, title, 36, cursor, textAreaW, attemptedSize, undefined, drawText );
 
 		// Divider
 		cursor += 10;
@@ -222,13 +246,13 @@
 
 		ctx.fillStyle = '#000000'; // black
 		ctx.font = '24px sans-serif';
-		drawWrappedText( ctx, bodyText, 36, cursor, textAreaW, 34, 450 );
+		drawWrappedText( ctx, bodyText, 36, cursor, textAreaW, 34, 450, drawText );
 
 		// Footer
 		const articleUrl = location.origin + mw.util.getUrl( title );
 		ctx.fillStyle = '#7F7F7F'; // black50
 		ctx.font = '18px sans-serif';
-		ctx.fillText( articleUrl, 36, H - 6 );
+		drawText( ctx, articleUrl, 36, H - 6 );
 
 		return canvas;
 	}
@@ -306,7 +330,7 @@
 	}
 
 	/**
-	 * Trigger the Web Share sheet with a generated image, URL, and title.
+	 * Show our modal with a preview image and share buttons
 	 */
 	async function doShare( selectedText ) {
 		const bodyText = ( selectedText && selectedText.trim().length > 10 )
@@ -321,24 +345,8 @@
 		// appears as soon as pixels are ready — before toBlob() runs.
 		const articleImage = await fetchArticleImage();
 		const logoImage = await fetchLogoImage();
-		const canvas = drawShareCanvas( bodyText, articleImage, logoImage );
 
-		// Swap spinner for the rendered canvas preview
-		modal.showCanvas( canvas );
-
-		// Convert to Blob (slightly async) in parallel with the user
-		// reading the preview
-		const imageBlob = await canvasToBlob( canvas );
-
-		const newImg = await blobToImage( imageBlob );
-		canvas.replaceWith( scaleElement( newImg ) );
-
-		modal.showShareButtons(
-			mw.config.get( 'wgTitle' ),
-			location.origin + mw.util.getUrl( mw.config.get( 'wgTitle' ) ),
-			selectedText,
-			imageBlob
-		);
+		modal.buildShareImage( bodyText, articleImage, logoImage );
 	}
 
 	// Preview modal
@@ -403,10 +411,11 @@
 
 		backdrop.appendChild( card );
 
-		// API: swap loading indicator for the canvas preview
-		backdrop.showCanvas = ( canvas ) => {
-			// Remove loading row
-			loadingRow.remove();
+		backdrop.buildShareImage = async ( bodyText, articleImage, logoImage, wide ) => {
+			const canvas = drawShareCanvas( bodyText, articleImage, logoImage, wide );
+
+			// Swap spinner for the rendered canvas preview
+			card.innerHTML = '';
 
 			// Label
 			const label = document.createElement( 'p' );
@@ -416,15 +425,41 @@
 				color: '#54595d',
 				alignSelf: 'flex-start'
 			} );
-			label.textContent = 'Image to be shared:';
+			label.textContent = 'Image to be shared: ';
+			[ [ 'Square', false ], [ 'Wide', true ] ].forEach( ( [ mode, modeArg ] ) => {
+				const action = document.createElement( 'button' );
+				action.textContent = mode;
+				action.addEventListener( 'click', ( e ) => {
+					e.stopPropagation();
+					e.preventDefault();
+					backdrop.buildShareImage( bodyText, articleImage, logoImage, modeArg );
+				} );
+				label.appendChild( action );
+			} );
 			card.appendChild( label );
 
 			scaleElement( canvas );
 
 			card.appendChild( canvas );
-		};
+
+			// Convert to Blob (slightly async) in parallel with the user
+			// reading the preview
+			const imageBlob = await canvasToBlob( canvas );
+
+			const newImg = await blobToImage( imageBlob );
+			canvas.replaceWith( scaleElement( newImg ) );
+
+			backdrop.showShareButtons(
+				mw.config.get( 'wgTitle' ),
+				location.origin + mw.util.getUrl( mw.config.get( 'wgTitle' ) ),
+				bodyText,
+				imageBlob
+			);
+		}
 
 		backdrop.showShareButtons = async ( title, url, text, imageBlob ) => {
+			const buttons = document.createElement( 'div' );
+
 			const copyButton = document.createElement( 'button' );
 			copyButton.innerHTML = copyIcon + ' Copy this image';
 			copyButton.addEventListener( 'click', async ( e ) => {
@@ -435,30 +470,32 @@
 				await navigator.clipboard.write( [ clipboardItem ] );
 				mw.notify( 'Copied image to the clipboard' );
 			} );
-			card.appendChild( copyButton );
-			if ( !navigator.share ) {
-				return;
+			buttons.appendChild( copyButton );
+			if ( navigator.share ) {
+				const shareButton = document.createElement( 'button' );
+				shareButton.innerHTML = shareIcon + ' Share this image';
+				shareButton.addEventListener( 'click', async ( e ) => {
+					e.stopPropagation();
+					e.preventDefault();
+					try {
+						const shareData = { title, url, text, files: [ new File( [ imageBlob ], 'wikipedia-share.png', { type: 'image/png' } ) ] };
+						// Fall back gracefully if file sharing isn't supported
+						if ( !( navigator.canShare && navigator.canShare( shareData ) ) ) {
+							delete shareData.files;
+						}
+						await navigator.share( shareData );
+					} catch ( e ) {
+						if ( e.name !== 'AbortError' ) {
+							mw.notify( 'Could not share: ' + e.message, { type: 'error' } );
+						}
+					} finally {
+						backdrop.remove();
+					}
+				} );
+				buttons.appendChild( shareButton );
 			}
-			const shareButton = document.createElement( 'button' );
-			shareButton.innerHTML = shareIcon + ' Share this image';
-			shareButton.addEventListener( 'click', async ( e ) => {
-				e.preventDefault();
-				try {
-					const shareData = { title, url, text, files: [ new File( [ imageBlob ], 'wikipedia-share.png', { type: 'image/png' } ) ] };
-					// Fall back gracefully if file sharing isn't supported
-					if ( !( navigator.canShare && navigator.canShare( shareData ) ) ) {
-						delete shareData.files;
-					}
-					await navigator.share( shareData );
-				} catch ( e ) {
-					if ( e.name !== 'AbortError' ) {
-						mw.notify( 'Could not share: ' + e.message, { type: 'error' } );
-					}
-				} finally {
-					backdrop.remove();
-				}
-			} );
-			card.appendChild( shareButton );
+
+			card.appendChild( buttons );
 		}
 
 		return backdrop;
