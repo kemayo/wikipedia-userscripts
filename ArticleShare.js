@@ -164,10 +164,12 @@
 		canvas.width = W;
 		canvas.height = H;
 		const ctx = canvas.getContext( '2d' );
+		ctx.textRendering = 'optimizeLegibility';
 
-		const titleFont = ( size = 44 ) => `bold ${size}px 'Linux Libertine','Georgia','Times','Source Serif 4',serif`;
+		const titleFont = ( size = 44 ) => `normal ${size}px 'Linux Libertine','Georgia','Times','Source Serif 4',serif`;
 
 		const logoFitHeight = 40
+		const MARGIN = 36;
 
 		// Background
 		ctx.fillStyle = '#ffffff';
@@ -202,12 +204,12 @@
 		// Logo in top-left
 		if ( logoImage ) {
 			const scale = logoFitHeight / logoImage.height;
-			ctx.drawImage( logoImage, 16, 16, logoImage.width * scale, logoImage.height * scale );
+			ctx.drawImage( logoImage, 20, 16, logoImage.width * scale, logoImage.height * scale );
 		} else {
 			// placeholder circle or suchlike? this is probably an unusual case anyway...
 			ctx.fillStyle = '#000000'; // black
-			ctx.font = titleFont( 22 );
-			ctx.fillText( 'Wikipedia', 36, 46 );
+			ctx.font = titleFont( 36 );
+			ctx.fillText( 'Wikipedia', 20, 46 );
 		}
 
 		let cursor = 70;
@@ -220,7 +222,7 @@
 		const title = mw.config.get( 'wgTitle' );
 		ctx.fillStyle = '#000000';
 		ctx.font = titleFont();
-		const textAreaW = ( ( articleImage && wide ) ? imgPanelX : W ) - 36 - 36;
+		const textAreaW = ( ( articleImage && wide ) ? imgPanelX : W ) - MARGIN - MARGIN;
 
 		// Shrink font if title is long
 		let attemptedSize = 44;
@@ -228,31 +230,33 @@
 			attemptedSize -= 2;
 			ctx.font = titleFont( attemptedSize );
 		}
-		cursor += drawWrappedText( ctx, title, 36, cursor, textAreaW, attemptedSize, undefined, drawText );
+		cursor += drawWrappedText( ctx, title, MARGIN, cursor, textAreaW, attemptedSize, undefined, drawText );
 
 		// Divider
 		cursor += 10;
 		// ctx.fillStyle = randomLegacyColor();
 		ctx.fillStyle = '#7F7F7F'; // black50
-		ctx.fillRect( 36, cursor, textAreaW, 2 );
-		cursor += 22;
+		ctx.fillRect( MARGIN, cursor, textAreaW, 2 );
+		cursor += 12;
 
 		// Opening quote mark
 		ctx.fillStyle = randomLegacyColor();
 		ctx.font = titleFont( 72 );
-		ctx.globalAlpha = 0.25;
-		ctx.fillText( '\u201c', 26, cursor + 44 );
+		ctx.globalAlpha = 0.33;
+		ctx.fillText( '\u201c', 26, cursor + 60 );
 		ctx.globalAlpha = 1;
 
+		// Article text
 		ctx.fillStyle = '#000000'; // black
-		ctx.font = '24px sans-serif';
-		drawWrappedText( ctx, bodyText, 36, cursor, textAreaW, 34, 450, drawText );
+		ctx.font = '26px sans-serif';
+		drawWrappedText( ctx, bodyText, MARGIN, cursor, textAreaW, 34, 450, drawText );
 
 		// Footer
 		const articleUrl = location.origin + mw.util.getUrl( title );
 		ctx.fillStyle = '#7F7F7F'; // black50
+		ctx.textAlign = 'right';
 		ctx.font = '18px sans-serif';
-		drawText( ctx, articleUrl, 36, H - 6 );
+		drawText( ctx, articleUrl, textAreaW + MARGIN, H - 16 );
 
 		return canvas;
 	}
