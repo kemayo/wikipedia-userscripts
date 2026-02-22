@@ -71,20 +71,20 @@
 		Object.assign( element.style, styles );
 	}
 
-	function drawOutlinedText( ctx, text, x, y ) {
+	function drawOutlinedText( ctx, text, x, y, maxWidth ) {
 		ctx.save();
 		ctx.strokeStyle = 'black';
 		ctx.fillStyle = 'white';
 		ctx.lineWidth = 4;
 		ctx.lineJoin = 'round';
 		ctx.miterLimit = 2;
-		ctx.strokeText( text, x, y );
-		ctx.fillText( text, x, y );
+		ctx.strokeText( text, x, y, maxWidth );
+		ctx.fillText( text, x, y, maxWidth );
 		ctx.restore();
 	}
 
-	function drawPlainText( ctx, text, x, y ) {
-		ctx.fillText( text, x, y );
+	function drawPlainText( ctx, text, x, y, maxWidth ) {
+		ctx.fillText( text, x, y, maxWidth );
 	}
 
 	/**
@@ -98,7 +98,7 @@
 	 * @param {number} lineHeight Vertical distance between baselines
 	 * @returns {number} Total height of drawn lines
 	 */
-	function drawWrappedText( ctx, text, x, y, maxWidth, lineHeight, maxHeight = Infinity, drawText = drawPlainText ) {
+	function drawWrappedText( ctx, text, x, y, maxWidth, lineHeight, maxHeight = Infinity, drawText = drawPlainText, background = false ) {
 		if ( lineHeight > maxHeight ) {
 			return;
 		}
@@ -134,7 +134,21 @@
 			lines.push( lastLine.replace(/[\.,?!]*$/, '') + '\u2026' );
 		}
 
+		const expectedHeight = lines.length * lineHeight;
+
 		// Finally draw the lines
+		if ( background ) {
+			const widestLine = lines.reduce(
+				( width, line ) => Math.max( width, ctx.measureText( line ).width ),
+				0
+			);
+			ctx.save();
+			ctx.fillStyle = 'rgba( 1, 1, 1, 0.2 )';
+			// text is being drawn to the alphabetic baseline, and we want the
+			// background to align with the 
+			ctx.fillRect( x - 8, y + 4, widestLine + 16, expectedHeight + 8 );
+			ctx.restore();
+		}
 		ctx.save();
 		// textBaseline is inconsistent between browsers. textBaseline=top is
 		// most consistent with what we're doing, but Safari renders the text
@@ -147,7 +161,7 @@
 		}
 
 		ctx.restore();
-		return lines.length * lineHeight;
+		return expectedHeight;
 	}
 
 	/**
@@ -217,6 +231,7 @@
 		ctx.strokeStyle = 'white';
 
 		const drawText = ( wide || !articleImage ) ? drawPlainText : drawOutlinedText;
+		const textNeedsBackground = ( !wide && articleImage );
 
 		// Article title
 		const title = mw.config.get( 'wgTitle' );
@@ -230,7 +245,7 @@
 			attemptedSize -= 2;
 			ctx.font = titleFont( attemptedSize );
 		}
-		cursor += drawWrappedText( ctx, title, MARGIN, cursor, textAreaW, attemptedSize, undefined, drawText );
+		cursor += drawWrappedText( ctx, title, MARGIN, cursor, textAreaW, attemptedSize, undefined, drawText, textNeedsBackground );
 
 		// Divider
 		cursor += 10;
@@ -249,14 +264,15 @@
 		// Article text
 		ctx.fillStyle = '#000000'; // black
 		ctx.font = '26px sans-serif';
-		drawWrappedText( ctx, bodyText, MARGIN, cursor, textAreaW, 34, 450, drawText );
+		const articleTextH = H - cursor - 18 - 16; // remaining canvas height, minus the footer and its margin
+		drawWrappedText( ctx, bodyText, MARGIN, cursor, textAreaW, 34, articleTextH, drawText, textNeedsBackground );
 
 		// Footer
 		const articleUrl = location.origin + mw.util.getUrl( title );
 		ctx.fillStyle = '#7F7F7F'; // black50
 		ctx.textAlign = 'right';
 		ctx.font = '18px sans-serif';
-		drawText( ctx, articleUrl, textAreaW + MARGIN, H - 16 );
+		drawText( ctx, articleUrl, textAreaW + MARGIN, H - 16, textAreaW );
 
 		return canvas;
 	}
