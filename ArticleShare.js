@@ -61,7 +61,8 @@
 
 	function fetchLogoImage() {
 		// const logo = document.querySelector( '.mw-logo img.mw-logo-icon' );
-		const logo = document.querySelector( '.mw-logo img.mw-logo-wordmark' );
+		const logo = document.querySelector( '.mw-logo img.mw-logo-wordmark' ) ||
+			document.querySelector( '.minerva-header .branding-box img' );
 		if ( logo ) {
 			return new Promise( ( resolve ) => { resolve( logo ) } );
 		}
