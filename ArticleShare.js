@@ -305,7 +305,7 @@
 			const url = URL.createObjectURL( blob );
 			const img = new Image();
 			img.onload = () => {
-				URL.revokeObjectURL( url );
+				// URL.revokeObjectURL( url );
 				resolve(img);
 			};
 			img.onerror = () => {
