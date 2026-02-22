@@ -144,7 +144,8 @@
 				0
 			);
 			ctx.save();
-			ctx.fillStyle = 'rgba( 1, 1, 1, 0.2 )';
+			ctx.fillStyle = '#ffffff';
+			ctx.globalAlpha = 0.6;
 			// text is being drawn to the alphabetic baseline, and we want the
 			// background to align with the 
 			ctx.fillRect( x - 8, y + 4, widestLine + 16, expectedHeight + 8 );
@@ -212,7 +213,12 @@
 			ctx.beginPath();
 			ctx.rect( imgPanelX, imgPanelY, imgPanelW, imgPanelH );
 			ctx.clip();
+			if ( !wide ) {
+				// ctx.filter = 'saturate(50%)';
+				ctx.filter = 'opacity(35%)';
+			}
 			ctx.drawImage( articleImage, sx, sy, sw, sh, imgPanelX, imgPanelY, imgPanelW, imgPanelH );
+			ctx.filter = 'none';
 			ctx.restore();
 		}
 
@@ -231,7 +237,8 @@
 
 		ctx.strokeStyle = 'white';
 
-		const drawText = ( wide || !articleImage ) ? drawPlainText : drawOutlinedText;
+		// const drawText = ( wide || !articleImage ) ? drawPlainText : drawOutlinedText;
+		const drawText = drawPlainText;
 		const textNeedsBackground = ( !wide && articleImage );
 
 		// Article title
