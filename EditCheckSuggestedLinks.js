@@ -48,6 +48,13 @@ let SuggestedLinksEditCheck = function() {
 
 OO.inheritClass( SuggestedLinksEditCheck, mw.editcheck.LinkEditCheck );
 
+SuggestedLinksEditCheck.static.defaultConfig = ve.extendObject( {}, mw.editcheck.BaseEditCheck.static.defaultConfig, {
+	// enabled: false,
+	// showAsCheck: false, showAsSuggestion: true
+	context: [ 'suggestion' ],
+	predictionThreshold: 0.6
+} );
+
 SuggestedLinksEditCheck.static.name = 'suggestedLinks';
 SuggestedLinksEditCheck.static.title = "Suggested link";
 SuggestedLinksEditCheck.static.description = "Does this link sound like a good idea?";
@@ -73,13 +80,12 @@ SuggestedLinksEditCheck.prototype.onDocumentChange = function ( surfaceModel ) {
 	return linkData.map( ( link ) => {
 		const range = link.fragment.getSelection().getRange();
 		if (
+			link.score >= this.config.predictionThreshold &&
 			!this.isDismissedRange( range ) &&
 			!this.getLinkFromFragment( link.fragment ) &&
 			modified.some( ( modifiedRange ) => modifiedRange.touchesRange( range ) )
 		) {
-			return new mw.editcheck.EditCheckAction( {
-				check: this,
-				fragments: [ link.fragment ],
+			return this.buildActionFromLinkRange( range, surfaceModel, {
 				message: "Do you want to link this to " + link.link_target + "?"
 			} );
 		}
@@ -96,6 +102,7 @@ SuggestedLinksEditCheck.prototype.act = function ( choice, action, surface ) {
 		}
 		fragment.annotateContent( 'clear', ve.dm.MWInternalLinkAnnotation.static.name );
 		fragment.annotateContent( 'set', ve.dm.MWInternalLinkAnnotation.static.newFromTitle( link.title ) );
+		action.select( surface, true );
 		return;
 	}
 	// Parent method
