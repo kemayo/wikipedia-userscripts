@@ -222,6 +222,7 @@ mw.editcheck.SuggestedImageEditCheckAction.prototype.render = function () {
 			$( '<img>' ).attr( 'src', imageData.thumbUrl )
 		);
 		ve.setAttributeSafe( $link[ 0 ], 'href', imageData.descriptionUrl );
+		ve.targetLinksToNewWindow( $link[ 0 ] );
 		widget.message.$element.after( $link );
 	}
 	return widget;
