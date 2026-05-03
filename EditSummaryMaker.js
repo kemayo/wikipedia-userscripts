@@ -96,7 +96,7 @@ function generateSummary( visualDiff ) {
 		console.log( change );
 		let section, sectionSummary;
 		switch ( change[ 0 ] ) {
-			case 'change':
+			case 'change': {
 				// This node changed somehow
 				// most interesting changes are going to be in here, because this includes additions to existing paragraph nodes
 				const [ _, nodeDiff, oldNode, newNode, move ] = change;
@@ -136,14 +136,16 @@ function generateSummary( visualDiff ) {
 					}
 				}
 				break;
+			}
+			// case 'move':
 			case 'insert':
-			case 'remove':
-			case 'move':
+			case 'remove': {
 				console.log( change[ 0 ], change );
 				section = findSectionNameForNode( change[ 1 ] );
 				sectionSummary = summary.set( section, summary.get( section ) || new Set() ).get( section );
 				sectionSummary.add( `${ change[ 0 ] } ${ change[ 1 ].getType() }` );
 				break;
+			}
 		}
 	}
 	// console.log( 'INTERNALLIST' );
@@ -159,18 +161,16 @@ function generateSummary( visualDiff ) {
 	// }
 	const output = [];
 	for ( let [ section, actions ] of summary ) {
-		if ( section ) {
-			output.push( `In ${ section }: ` );
-		}
-		output.push( actions.values().toArray().join( ', ' ) + '. ' );
+		const actionStr = Array.from( actions ).join( ', ' );
+		output.push( section ? `In ${ section }: ${ actionStr }` : actionStr );
 	}
-	return output.join( '' ).trim();
+	return output.join( '. ' ).trim();
 }
 
 function findSectionForNode( node ) {
 	const start = node.getRange().start;
 	const headings = node.getDocument().getNodesByType( 'mwHeading', true );
-	for ( let heading of headings ) {
+	for ( let heading of headings.reverse() ) {
 		const range = heading.getOuterRange();
 		if ( range.start < start ) {
 			return heading;
@@ -184,7 +184,7 @@ function findSectionNameForNode( node ) {
 	if ( heading ) {
 		return heading.getDocument().data.getText( false, heading.getRange() ).trim();
 	}
-	if ( node.getDocument().getNodesByType( 'mwHeading' ) ) {
+	if ( node.getDocument().getNodesByType( 'mwHeading' ).length > 0 ) {
 		return 'lead section';
 	}
 	return null;
