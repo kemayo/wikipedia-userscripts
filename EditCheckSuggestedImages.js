@@ -82,7 +82,7 @@ mw.editcheck.SuggestedImageEditCheck.static.fetchSuggestions = function ( surfac
 /* Methods */
 
 mw.editcheck.SuggestedImageEditCheck.prototype.onDocumentChange = function ( surfaceModel ) {
-	return this.constructor.static.fetchSuggestions( surfaceModel, this ).then( ( imageData ) => {
+	return this.constructor.static.fetchSuggestions( surfaceModel ).then( ( imageData ) => {
 		if ( !imageData ) {
 			return null;
 		}
