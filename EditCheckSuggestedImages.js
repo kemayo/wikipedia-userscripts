@@ -14,6 +14,28 @@ if ( mw.editcheck.SuggestedImageEditCheck ) {
 	return;
 }
 
+// TODO: remove after I0a415e9fa322ab75304ddaf9777615a9a3e7ea56 is merged
+ve.dm.MWImageModel.static.newFromImageInfo = function ( info, parentDoc ) {
+	const imageTitleText = info.title || info.canonicaltitle;
+	// Run title through mw.Title so the File: prefix is localised
+	const title = mw.Title.newFromText( imageTitleText ).getPrefixedText();
+	// Map imageinfo onto attributes
+	const attrs = {
+		// Per https://www.mediawiki.org/w/?diff=931265&oldid=prev
+		href: './' + title,
+		src: info.url,
+		resource: './' + title,
+		width: info.thumbwidth || info.width,
+		height: info.thumbheight || info.height,
+		mediaType: info.mediatype,
+		type: info.type || ( info.thumbwidth ? 'thumb' : 'none' ),
+		align: 'default',
+		defaultSize: true,
+		imageClassAttr: 'mw-file-element'
+	};
+	return ve.dm.MWImageModel.static.newFromImageAttributes( attrs, parentDoc );
+};
+
 /*
  * SuggestedImageEditCheck
  *
@@ -118,7 +140,7 @@ mw.editcheck.SuggestedImageEditCheck.prototype.act = function ( choice, action, 
 			action: 'query',
 			format: 'json',
 			prop: 'imageinfo',
-			titles: `File:${ action.image.image }`,
+			titles: mw.Title.newFromText( action.image.image, mw.config.get( 'wgNamespaceIds' ).file ).getPrefixedDb(),
 			iiprop: 'dimensions|url|mediatype|canonicaltitle',
 			iiurlwidth: mw.config.get( 'wgVisualEditorConfig' ).thumbLimits[ mw.user.options.get( 'thumbsize' ) ] || 250,
 			formatversion: '2'
@@ -135,16 +157,8 @@ mw.editcheck.SuggestedImageEditCheck.prototype.act = function ( choice, action, 
 			const documentModel = surface.getModel().getDocument();
 			const nextOffset = documentModel.getNearestCursorOffset( fragment.selection.getCoveringRange().end, 1 );
 			const insertionFragment = surface.getModel().getLinearFragment( new ve.Range( nextOffset ) );
-			const imageModel = ve.dm.MWImageModel.static.newFromImageAttributes( {
-				resource: `./${ imageinfo.canonicaltitle }`,
-				href: `./${ imageinfo.canonicaltitle }`,
-				src: imageinfo.thumburl,
-				width: imageinfo.thumbwidth,
-				height: imageinfo.thumbheight,
-				type: 'thumb'
-			}, documentModel );
+			const imageModel = ve.dm.MWImageModel.static.newFromImageInfo( imageinfo, documentModel );
 			insertionFragment.insertContent( imageModel.getData() );
-			// insertionFragment.insertDocument( doc );
 			const leafNodes = insertionFragment.getLeafNodes();
 			action.focusFragment = insertionFragment;
 			if ( leafNodes.length > 0 ) {
