@@ -71,13 +71,11 @@ mw.editcheck.SuggestedImageEditCheck.static.description = 'Do you want to add th
 mw.editcheck.SuggestedImageEditCheck.static.choices = [
 	{
 		action: 'accept',
-		label: OO.ui.deferMsg( 'editcheck-dialog-action-yes' ),
-		icon: 'check'
+		label: 'Add image'
 	},
 	{
 		action: 'dismiss',
-		label: OO.ui.deferMsg( 'editcheck-dialog-action-no' ),
-		icon: 'close'
+		label: OO.ui.deferMsg( 'ooui-dialog-process-dismiss' )
 	}
 ];
 
@@ -167,9 +165,10 @@ mw.editcheck.SuggestedImageEditCheck.prototype.act = function ( choice, action, 
 					// We've definitely inserted an image with a caption, and
 					// the leaf we have selected is the paragraph node inside the caption.
 					const captionFragment = surface.getModel().getLinearFragment( leaf.nodeRange );
-					if ( action.image.metadata.caption ) {
-						captionFragment.insertContent( action.image.metadata.caption );
-					}
+					captionFragment.insertContent(
+						action.image.metadata.caption ||
+						[ { type: 'paragraph' }, { type: '/paragraph' } ]
+					);
 					action.focusFragment = captionFragment;
 				}
 			}
@@ -203,7 +202,10 @@ mw.editcheck.SuggestedImageEditCheckAction.prototype.render = function () {
 	const imageData = ve.getProp( this, 'image', 'metadata' );
 	if ( imageData ) {
 		const $link = $( '<a>' ).append(
-			$( '<img>' ).attr( 'src', imageData.thumbUrl )
+			$( '<img>' )
+				.attr( 'src', imageData.thumbUrl )
+				.attr( 'title', imageData.description )
+				.css( 'margin-top', '8px' )
 		);
 		ve.setAttributeSafe( $link[ 0 ], 'href', imageData.descriptionUrl );
 		ve.targetLinksToNewWindow( $link[ 0 ] );
