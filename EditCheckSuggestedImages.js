@@ -92,9 +92,31 @@ mw.editcheck.SuggestedImageEditCheck.static.fetchSuggestions = function ( surfac
 			gisdtasktype: 'section-image-recommendation',
 			titles: mw.config.get( 'wgRelevantPageName' ),
 			formatversion: '2'
-		} ).then(
-			( response ) => ve.getProp( response, 'query', 'pages', 0, 'growthimagesuggestiondata', 0, 'images' )
-		) );
+		} )
+			.then( ( response ) => ve.getProp( response, 'query', 'pages', 0, 'growthimagesuggestiondata', 0, 'images' ) )
+			.then( ( suggestions ) => {
+				// See: AddSectionImageArticleTarget.prototype.getInsertRange in GrowthExperiments
+				const documentModel = surfaceModel.getDocument();
+				const headings = documentModel.getNodesByType( 'mwHeading', true )
+					.filter( ( heading ) => heading.getAttribute( 'level' ) === 2 );
+				for ( const imageData of suggestions ) {
+					const heading = headings[ imageData.sectionNumber - 1 ];
+					if ( !heading ) {
+						continue;
+					}
+					const expectedTitleText = imageData.sectionTitle.replace( /_/g, ' ' );
+					const range = heading.getRange();
+					if ( documentModel.data.getText( false, range ) === expectedTitleText ) {
+						imageData.fragment = surfaceModel.getLinearFragment( range );
+						const nextHeading = headings[ imageData.sectionNumber ];
+						imageData.sectionFragment = surfaceModel.getLinearFragment(
+							new ve.Range( heading.getOuterRange().end, nextHeading ? nextHeading.getOffset() : documentModel.getDocumentRange().end )
+						);
+					}
+				}
+				return suggestions;
+			} )
+		);
 	}
 	return this.cachedPromises.get( surfaceModel );
 };
@@ -102,28 +124,33 @@ mw.editcheck.SuggestedImageEditCheck.static.fetchSuggestions = function ( surfac
 /* Methods */
 
 mw.editcheck.SuggestedImageEditCheck.prototype.onDocumentChange = function ( surfaceModel ) {
-	return this.constructor.static.fetchSuggestions( surfaceModel ).then( ( imageData ) => {
-		if ( !imageData ) {
+	return this.constructor.static.fetchSuggestions( surfaceModel ).then( ( suggestions ) => {
+		if ( !suggestions ) {
 			return null;
 		}
 		const documentModel = surfaceModel.getDocument();
 		const modified = this.getModifiedRanges( documentModel );
-		// TODO: check API to see what it counts as a section
-		const headings = this.getHeadingsFromDocument( documentModel ).filter( ( heading ) => heading.getAttribute( 'level' ) === 2 );
-		return imageData.map( ( image ) => {
-			const heading = headings[ image.sectionNumber - 1 ];
-			const range = heading.getRange();
+		const existingImages = [
+			...documentModel.getNodesByType( 'mwBlockImage' ),
+			...documentModel.getNodesByType( 'mwInlineImage' )
+		].sort( ( a, b ) => a.getOffset() - b.getOffset() );
+		return suggestions.map( ( imageData ) => {
+			if ( !imageData.fragment ) {
+				return null;
+			}
+			const range = imageData.fragment.getSelection().getRange();
+			const sectionRange = imageData.sectionFragment.getSelection().getRange();
 			if (
-				// The heading still exists in the same place with the same name
-				documentModel.data.getText( false, range ).replace( ' ', '_' ) === image.sectionTitle &&
 				!this.isDismissedRange( range ) &&
-				modified.some( ( modifiedRange ) => modifiedRange.touchesRange( range ) )
-				// TODO: check whether there's an image here already
+				modified.some( ( modifiedRange ) => modifiedRange.touchesRange( range ) ) &&
+				// Has an image already been added to this section?
+				!existingImages.some( ( imageNode ) => sectionRange.containsOffset( imageNode.getOffset() ) )
+				// TODO: does existingImages contain this recommended image already in another section?
 			) {
 				return new mw.editcheck.SuggestedImageEditCheckAction( {
-					image,
-					message: image.metadata.reason,
-					fragments: [ surfaceModel.getLinearFragment( range ) ],
+					imageData,
+					message: imageData.metadata.reason,
+					fragments: [ imageData.fragment ],
 					check: this
 				} );
 			}
@@ -138,7 +165,7 @@ mw.editcheck.SuggestedImageEditCheck.prototype.act = function ( choice, action, 
 			action: 'query',
 			format: 'json',
 			prop: 'imageinfo',
-			titles: mw.Title.newFromText( action.image.image, mw.config.get( 'wgNamespaceIds' ).file ).getPrefixedDb(),
+			titles: mw.Title.newFromText( action.imageData.image, mw.config.get( 'wgNamespaceIds' ).file ).getPrefixedDb(),
 			iiprop: 'dimensions|url|mediatype|canonicaltitle',
 			iiurlwidth: mw.config.get( 'wgVisualEditorConfig' ).thumbLimits[ mw.user.options.get( 'thumbsize' ) ] || 250,
 			formatversion: '2'
@@ -155,6 +182,7 @@ mw.editcheck.SuggestedImageEditCheck.prototype.act = function ( choice, action, 
 			const documentModel = surface.getModel().getDocument();
 			const nextOffset = documentModel.getNearestCursorOffset( fragment.selection.getCoveringRange().end, 1 );
 			const insertionFragment = surface.getModel().getLinearFragment( new ve.Range( nextOffset ) );
+
 			const imageModel = ve.dm.MWImageModel.static.newFromImageInfo( imageinfo, documentModel );
 			insertionFragment.insertContent( imageModel.getData() );
 			const leafNodes = insertionFragment.getLeafNodes();
@@ -165,16 +193,16 @@ mw.editcheck.SuggestedImageEditCheck.prototype.act = function ( choice, action, 
 					// We've definitely inserted an image with a caption, and
 					// the leaf we have selected is the paragraph node inside the caption.
 					const captionFragment = surface.getModel().getLinearFragment( leaf.nodeRange );
-					captionFragment.insertContent(
-						action.image.metadata.caption ||
-						[ { type: 'paragraph' }, { type: '/paragraph' } ]
-					);
-					action.focusFragment = captionFragment;
+					if ( action.imageData.metadata.caption ) {
+						captionFragment.insertContent( action.imageData.metadata.caption );
+						action.focusFragment = captionFragment;
+					} else {
+						captionFragment.insertContent( [ { type: 'paragraph' }, { type: '/paragraph' } ] );
+						action.focusFragment = captionFragment.adjustLinearSelection( 1, -1 );
+					}
 				}
 			}
-			action.select( surface );
-			// Stop suggesting:
-			this.dismiss( action );
+			action.select( surface, true );
 		} );
 	}
 	// Parent method
@@ -188,7 +216,7 @@ mw.editcheck.editCheckFactory.register( mw.editcheck.SuggestedImageEditCheck );
 mw.editcheck.SuggestedImageEditCheckAction = function ( config ) {
 	mw.editcheck.SuggestedImageEditCheckAction.super.call( this, config );
 
-	this.image = config.image;
+	this.imageData = config.imageData;
 };
 
 OO.inheritClass( mw.editcheck.SuggestedImageEditCheckAction, mw.editcheck.EditCheckAction );
@@ -199,20 +227,21 @@ OO.inheritClass( mw.editcheck.SuggestedImageEditCheckAction, mw.editcheck.EditCh
 mw.editcheck.SuggestedImageEditCheckAction.prototype.render = function () {
 	const widget = mw.editcheck.SuggestedImageEditCheckAction.super.prototype.render.apply( this, arguments );
 
-	const imageData = ve.getProp( this, 'image', 'metadata' );
-	if ( imageData ) {
+	const imageMetadata = ve.getProp( this, 'image', 'metadata' );
+	if ( imageMetadata ) {
 		const $link = $( '<a>' ).append(
 			$( '<img>' )
-				.attr( 'src', imageData.thumbUrl )
-				.attr( 'title', imageData.description )
+				.attr( 'src', imageMetadata.thumbUrl )
+				.attr( 'title', imageMetadata.description )
 				.css( 'margin-top', '8px' )
 		);
-		ve.setAttributeSafe( $link[ 0 ], 'href', imageData.descriptionUrl );
+		ve.setAttributeSafe( $link[ 0 ], 'href', imageMetadata.descriptionUrl );
 		ve.targetLinksToNewWindow( $link[ 0 ] );
 		widget.message.$element.after( $link );
 	}
 	return widget;
 };
+
 
 
 //
