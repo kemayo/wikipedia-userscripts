@@ -26,6 +26,8 @@ mw.hook( 've.newTarget' ).add( ( target ) => {
 			return;
 		}
 
+		// TODO: multiple lines
+
 		// The current selection:
 		let fragment = this.surface.getModel().getFragment()
 			// With how the wikitext surface works, this will be the current paragraph-that's-a-wikitext-line:
