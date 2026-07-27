@@ -1,18 +1,21 @@
 // ==UserScript==
 // @name         Phabricator: move tag + column in one step
-// @version      2026-07-26
+// @version      2026-07-27
 // @description  Quick move to a specific tag-with-column
 // @author       David Lynch
 // @namespace    davidlynch.org
 // @match        https://phabricator.wikimedia.org/T*
+// @match        https://phabricator.wikimedia.org/project/*
+// @match        https://phabricator.wikimedia.org/tag/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
 
-// Adds a curtain panel below "Project Tags" that applies a single maniphest.edit:
-// optionally remove one current tag, assign the task to you, and move it into an
-// arbitrary column of any project. The `column` transaction auto-attaches the
-// destination board, so "leave sprint A, enter column Z of sprint B" is one edit.
+// On a task: a curtain panel below "Project Tags". On a workboard: a hover
+// checkbox on each card; checking any card reveals every card's checkbox and a
+// floating panel that loops the edit over the selected set. Each edit is a
+// single maniphest.edit: optionally remove one tag, assign to you, and move into
+// an arbitrary column. The `column` transaction auto-attaches the destination board.
 //
 // Auth: session cookies + CSRF header, no stored API token. If Conduit rejects
 // the write with an auth (not CSRF) error, add `api.token` to conduit()'s body
@@ -23,9 +26,6 @@
 
   const MRU_KEY = 'phab-tagmove-mru';
   const MRU_MAX = 6;
-
-  const monogram = (location.pathname.match(/\/(T\d+)/) || [])[1];
-  if (!monogram) return;
 
   // --- Conduit -------------------------------------------------------------
 
@@ -51,9 +51,9 @@
 
   // Removal candidates come from the DOM (no PHIDs there); resolve the chosen
   // one at submit time. Tag links are /tag/<slug>/ or /project/view/<id>/.
-  function readTagsFromDom() {
+  function readTagsFromDom(root) {
     const out = [];
-    document.querySelectorAll('.phabricator-handle-tag-list-item').forEach((li) => {
+    root.querySelectorAll('.phabricator-handle-tag-list-item').forEach((li) => {
       const a = li.querySelector('a.phui-tag-view');
       if (!a) return;
       const href = a.getAttribute('href') || '';
@@ -93,15 +93,15 @@
     return r.data.map((d) => ({ phid: d.phid, name: d.fields.name, hidden: !!d.fields.isHidden }));
   }
 
-  async function applyMove({ removePHID, ownerPHID, columnPHID }) {
+  async function applyMove(target, { removePHID, ownerPHID, columnPHID }) {
     const txns = [];
     if (removePHID) txns.push({ type: 'projects.remove', value: [removePHID] });
     if (ownerPHID) txns.push({ type: 'owner', value: ownerPHID });
     txns.push({ type: 'column', value: columnPHID }); // auto-adds the board
-    return conduit('maniphest.edit', { objectIdentifier: monogram, transactions: txns });
+    return conduit('maniphest.edit', { objectIdentifier: target, transactions: txns });
   }
 
-  // Viewer PHID for "assign to me"; cached since it is constant per session.
+  // Viewer PHID for "claim"; cached since it is constant per session.
   async function viewerPHID() {
     const KEY = 'phab-viewer-phid';
     const cached = localStorage.getItem(KEY);
@@ -109,7 +109,7 @@
     try {
       const r = await conduit('user.whoami', {});
       if (r && r.phid) { localStorage.setItem(KEY, r.phid); return r.phid; }
-    } catch (e) { /* user.whoami unavailable; the checkbox stays disabled */ }
+    } catch (e) { /* user.whoami unavailable; the claim button stays disabled */ }
     return null;
   }
 
@@ -140,8 +140,8 @@
 
   // --- UI ------------------------------------------------------------------
 
-  // Layout/labels/button reuse Phabricator's own form classes; this only covers
-  // input borders (not set in core CSS), the custom typeahead, and the status line.
+  // Layout/labels/button reuse Phabricator's own form classes; this covers input
+  // borders (not set in core CSS), the typeahead, the float panel, and selection.
   const css = `
     .tcm-body input[type=text], .tcm-body select { width:100%; box-sizing:border-box;
       padding:4px 6px; border:1px solid #c7ccd9; border-radius:3px; font-size:13px; }
@@ -154,16 +154,27 @@
     .tcm-mru .phabricator-handle-tag-list-item { cursor:pointer; }
     .tcm-del { color:#c0392b; cursor:pointer; font-size:11px; }
     .tcm-actions { display:flex; gap:6px; }
+    .tcm-count { font-size:12px; color:#6b748c; margin:4px 0 2px; }
     .tcm-status { margin-top:6px; font-size:12px; color:#c0392b; }
     .tcm-status:empty { display:none; }
+    .tcm-float { position:fixed; bottom:16px; right:16px; width:300px; z-index:1000;
+      background:#fff; border:1px solid #c7ccd9; border-radius:4px;
+      box-shadow:0 4px 16px rgba(0,0,0,.15); padding:2px 12px 12px; }
+    .phui-oi-actions .tcm-cb-li { display:none; float:right; width:20px; height:100%; position:relative; }
+    .device-desktop .phui-workcard.phui-oi:hover .tcm-cb-li,
+    body.tcm-selecting .phui-oi-actions .tcm-cb-li { display:inline-block; }
+    .tcm-cb { position:absolute; top:50%; left:2px; margin-top:-7px; cursor:pointer; }
+    .phui-workcard.tcm-selected { outline:2px solid #3498db; outline-offset:-2px; }
   `;
 
-  function build() {
+  // config: { getTargets():[monogram], removeOptions:[{name,slug,pid}], showCount:bool }
+  function build(config) {
     const panel = document.createElement('div');
     panel.className = 'phui-curtain-panel';
     panel.innerHTML = `
       <div class="phui-curtain-panel-header">Move tag + column</div>
       <div class="phui-curtain-panel-body tcm-body">
+        <div class="tcm-count" style="display:none"></div>
         <div class="phui-form-view phui-form-full-width">
           <div class="aphront-form-control aphront-form-control-select">
             <label class="aphront-form-label">Remove tag</label>
@@ -208,25 +219,33 @@
     const colSel = $('.tcm-col');
     const mruControl = $('.tcm-mru-control');
     const mruDiv = $('.tcm-mru');
+    const countEl = $('.tcm-count');
     const goBtn = $('.tcm-go');
     const status = $('.tcm-status');
     const assignBtn = $('.tcm-go-assign');
 
-    // "Move + assign" is enabled only once we can resolve the viewer's PHID.
-    let viewer = null;
-    viewerPHID().then((phid) => {
-      viewer = phid;
-      refreshGo();
-      if (!phid) assignBtn.title = 'Could not determine your user';
-    });
+    if (config.showCount) countEl.style.display = '';
 
     let picked = null; // the chosen destination project, recorded into the MRU on submit
     const setStatus = (msg, ok) => { status.textContent = msg || ''; status.style.color = ok ? '#27ae60' : '#c0392b'; };
-    const refreshGo = () => { goBtn.disabled = !colSel.value; assignBtn.disabled = !colSel.value || !viewer; };
     const pick = (p) => { picked = p; projInput.value = p.name; };
+    const refresh = () => {
+      const n = config.getTargets().length;
+      if (config.showCount) countEl.textContent = `${n} selected`;
+      goBtn.disabled = !colSel.value || !n;
+      assignBtn.disabled = !colSel.value || !n || !viewer;
+    };
 
-    // Removal options straight from the DOM; no API call needed at load.
-    readTagsFromDom().forEach((t) => {
+    // "Move + claim" is enabled only once we can resolve the viewer's PHID.
+    let viewer = null;
+    viewerPHID().then((phid) => {
+      viewer = phid;
+      refresh();
+      if (!phid) assignBtn.title = 'Could not determine your user';
+    });
+
+    // Removal options are supplied by the caller (task tags, or the board).
+    config.removeOptions.forEach((t) => {
       const o = new Option(t.name, t.slug || t.pid);
       if (t.slug) o.dataset.slug = t.slug; else o.dataset.pid = t.pid;
       removeSel.add(o);
@@ -242,14 +261,14 @@
       } catch (e) {
         setStatus(`Couldn't load columns: ${e.message}`);
       }
-      refreshGo();
+      refresh();
     }
 
     let debounce;
     projInput.addEventListener('input', () => {
       picked = null;
       colSel.innerHTML = '<option value="">(pick a board first)</option>';
-      refreshGo();
+      refresh();
       clearTimeout(debounce);
       const text = projInput.value.trim();
       if (text.length < 2) { sugg.style.display = 'none'; return; }
@@ -268,7 +287,7 @@
       }, 250);
     });
 
-    colSel.addEventListener('change', refreshGo);
+    colSel.addEventListener('change', refresh);
 
     function renderMru() {
       const mru = loadMru();
@@ -282,46 +301,142 @@
     renderMru();
 
     async function doMove(assign) {
-      if (!colSel.value) return;
+      const targets = config.getTargets();
+      if (!colSel.value || !targets.length) return;
       goBtn.disabled = assignBtn.disabled = true;
-      setStatus('Applying...');
+      let done = 0;
       try {
         const opt = removeSel.selectedOptions[0];
         const removePHID = opt && opt.value ? await resolvePHID(opt.dataset.slug, opt.dataset.pid) : null;
-        await applyMove({ removePHID, ownerPHID: assign ? viewer : null, columnPHID: colSel.value });
+        const ownerPHID = assign ? viewer : null;
+        for (const t of targets) {
+          setStatus(`Applying ${++done}/${targets.length}...`);
+          await applyMove(t, { removePHID, ownerPHID, columnPHID: colSel.value });
+        }
         pushMru({ project: picked, columnPHID: colSel.value, columnName: colSel.selectedOptions[0].text });
         setStatus('Done, reloading...', true);
         location.reload();
       } catch (e) {
-        setStatus(e.message);
-        refreshGo();
+        setStatus(`${e.message} (stopped after ${done}/${targets.length})`);
+        refresh();
       }
     }
     goBtn.addEventListener('click', () => doMove(false));
     assignBtn.addEventListener('click', () => doMove(true));
 
-    return panel;
+    return { el: panel, refresh };
   }
 
-  // Placement: a new curtain panel right after the "Project Tags" panel, in the
-  // side rail. This is the only markup-coupled part; the move logic depends only
-  // on the stable Conduit API.
-  function mount() {
-    document.head.appendChild(Object.assign(document.createElement('style'), { textContent: css }));
-    const box = build();
+  // --- Task mode: curtain panel below Project Tags -------------------------
+
+  function initTaskMode(monogram) {
+    const { el } = build({
+      getTargets: () => [monogram],
+      removeOptions: readTagsFromDom(document),
+      showCount: false,
+    });
 
     const tagsPanel = [...document.querySelectorAll('.phui-curtain-panel')].find(
       (p) => p.querySelector('.phui-curtain-panel-header')?.textContent.trim() === 'Project Tags'
     );
-    if (tagsPanel) { tagsPanel.after(box); return; }
+    if (tagsPanel) { tagsPanel.after(el); return; }
 
     const rail = document.querySelector('.phui-side-column');
-    if (rail) { console.warn('[tag+column move] Project Tags panel not found; appended to rail.'); rail.appendChild(box); return; }
+    if (rail) { console.warn('[tag+column move] Project Tags panel not found; appended to rail.'); rail.appendChild(el); return; }
 
     console.warn('[tag+column move] Side rail not found; using fixed panel.');
-    box.style.cssText = 'position:fixed;right:10px;bottom:10px;width:300px;z-index:9999;background:#fff;border:1px solid #dfe1e9';
-    document.body.appendChild(box);
+    el.classList.add('tcm-float');
+    document.body.appendChild(el);
   }
 
-  mount();
+  // --- Board mode: select cards, then act on the set -----------------------
+
+  function boardRemoveOption() {
+    let m;
+    if ((m = location.pathname.match(/\/project\/board\/(\d+)/))) return [{ name: 'this board', pid: m[1] }];
+    if ((m = location.pathname.match(/^\/tag\/([^/]+)\//))) return [{ name: 'this board', slug: m[1] }];
+    return [];
+  }
+
+  function initBoardMode() {
+    const selected = new Set();
+    let api = null;
+    let floatWrap = null;
+
+    const monoOf = (card) => {
+      const name = card.querySelector('.phui-oi-objname');
+      if (name) return name.textContent.trim();
+      const href = card.querySelector('a.phui-oi-link')?.getAttribute('href') || '';
+      return (href.match(/\/(T\d+)/) || [])[1] || null;
+    };
+
+    function ensurePanel() {
+      if (api) return;
+      api = build({ getTargets: () => [...selected], removeOptions: boardRemoveOption(), showCount: true });
+      floatWrap = Object.assign(document.createElement('div'), { className: 'tcm-float' });
+      floatWrap.style.display = 'none';
+      floatWrap.appendChild(api.el);
+      document.body.appendChild(floatWrap);
+    }
+
+    // A non-empty selection reveals every card's checkbox (via body class) and
+    // shows the panel; emptying it hides both again.
+    function update() {
+      const active = selected.size > 0;
+      document.body.classList.toggle('tcm-selecting', active);
+      ensurePanel();
+      floatWrap.style.display = active ? '' : 'none';
+      api.refresh();
+    }
+
+    function onToggle(card, checked) {
+      const mono = monoOf(card);
+      if (!mono) return;
+      if (checked) { selected.add(mono); card.classList.add('tcm-selected'); }
+      else { selected.delete(mono); card.classList.remove('tcm-selected'); }
+      update();
+    }
+
+    // Checkbox lives in the card's action list, so it inherits the same
+    // hover-reveal the edit pencil uses (see CSS).
+    function inject(card) {
+      if (card.querySelector('.tcm-cb')) return;
+      let actions = card.querySelector('.phui-oi-actions');
+      if (!actions) {
+        actions = Object.assign(document.createElement('ul'), { className: 'phui-oi-actions' });
+        (card.querySelector('.phui-oi-frame-content') || card).appendChild(actions);
+      }
+      const li = Object.assign(document.createElement('li'), { className: 'phui-list-item-view tcm-cb-li' });
+      const cb = Object.assign(document.createElement('input'), { type: 'checkbox', className: 'tcm-cb' });
+      li.appendChild(cb);
+      actions.insertBefore(li, actions.firstChild);
+      cb.addEventListener('change', () => onToggle(card, cb.checked));
+    }
+
+    document.querySelectorAll('.phui-workcard').forEach(inject);
+
+    // Cards are rebuilt on drag/filter; keep injecting into fresh ones.
+    new MutationObserver((muts) => {
+      for (const m of muts) for (const n of m.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        if (n.matches?.('.phui-workcard')) inject(n);
+        n.querySelectorAll?.('.phui-workcard').forEach(inject);
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+
+    // Keep checkbox interaction from reaching Javelin (no drag start, no card
+    // navigation); the checkbox's own toggle still fires. Capture runs before
+    // Stratcom's bubbling handlers.
+    ['mousedown', 'click'].forEach((type) =>
+      document.addEventListener(type, (ev) => {
+        if (ev.target.closest('.tcm-cb-li')) ev.stopPropagation();
+      }, true));
+  }
+  // --- Dispatch ------------------------------------------------------------
+
+  document.head.appendChild(Object.assign(document.createElement('style'), { textContent: css }));
+
+  const monogram = (location.pathname.match(/\/(T\d+)/) || [])[1];
+  if (monogram) initTaskMode(monogram);
+  else if (document.querySelector('.phui-workcard')) initBoardMode();
 })();
