@@ -51,9 +51,9 @@
 
   // Removal candidates come from the DOM (no PHIDs there); resolve the chosen
   // one at submit time. Tag links are /tag/<slug>/ or /project/view/<id>/.
-  function readTagsFromDom(root) {
+  function readTagsFromDom() {
     const out = [];
-    root.querySelectorAll('.phabricator-handle-tag-list-item').forEach((li) => {
+    document.querySelectorAll('.phabricator-handle-tag-list-item').forEach((li) => {
       const a = li.querySelector('a.phui-tag-view');
       if (!a) return;
       const href = a.getAttribute('href') || '';
@@ -169,7 +169,8 @@
     .phui-header-action-list .tcm-selall-li { display:none; }
     .phui-header-shell:hover .tcm-selall-li,
     body.tcm-selecting .phui-header-action-list .tcm-selall-li { display:inline-block; }
-    .tcm-selall { cursor:pointer; vertical-align:middle; margin:0; }
+    /* No margin override: Phab's own input[type=checkbox] spacing looks right. */
+    input[type="checkbox"].tcm-selall { cursor:pointer; vertical-align:middle; }
   `;
 
   // config: { getTargets():[monogram], removeOptions:[{name,slug,pid}], showCount:bool }
@@ -232,13 +233,17 @@
     if (config.showCount) countEl.style.display = '';
 
     let picked = null; // the chosen destination project, recorded into the MRU on submit
-    const setStatus = (msg, ok) => { status.textContent = msg || ''; status.style.color = ok ? '#27ae60' : '#c0392b'; };
+    let busy = false;  // an edit is in flight; refresh() must not re-enable submit
+    // Writes are guarded: the board observer treats any DOM change as a cue to
+    // re-render, so an unconditional write here would feed back into itself.
+    const setText = (el, text) => { if (el.textContent !== text) el.textContent = text; };
+    const setStatus = (msg, ok) => { setText(status, msg || ''); status.style.color = ok ? '#27ae60' : '#c0392b'; };
     const pick = (p) => { picked = p; projInput.value = p.name; };
     const refresh = () => {
       const n = config.getTargets().length;
-      if (config.showCount) countEl.textContent = `${n} selected`;
-      goBtn.disabled = !colSel.value || !n;
-      assignBtn.disabled = !colSel.value || !n || !viewer;
+      if (config.showCount) setText(countEl, `${n} selected`);
+      goBtn.disabled = busy || !colSel.value || !n;
+      assignBtn.disabled = busy || !colSel.value || !n || !viewer;
     };
 
     // "Move + claim" is enabled only once we can resolve the viewer's PHID.
@@ -294,6 +299,10 @@
 
     colSel.addEventListener('change', refresh);
 
+    document.addEventListener('click', (ev) => {
+      if (ev.target !== projInput && !sugg.contains(ev.target)) sugg.style.display = 'none';
+    });
+
     function renderMru() {
       const mru = loadMru();
       mruControl.style.display = mru.length ? '' : 'none';
@@ -307,8 +316,9 @@
 
     async function doMove(assign) {
       const targets = config.getTargets();
-      if (!colSel.value || !targets.length) return;
-      goBtn.disabled = assignBtn.disabled = true;
+      if (busy || !colSel.value || !targets.length) return;
+      busy = true;
+      refresh();
       let done = 0;
       try {
         const opt = removeSel.selectedOptions[0];
@@ -320,16 +330,18 @@
         }
         pushMru({ project: picked, columnPHID: colSel.value, columnName: colSel.selectedOptions[0].text });
         setStatus(`Moved ${targets.length}.`, true);
+        busy = false;
         config.onDone(targets.length);
       } catch (e) {
         setStatus(`${e.message} (stopped after ${done}/${targets.length})`);
+        busy = false;
         refresh();
       }
     }
     goBtn.addEventListener('click', () => doMove(false));
     assignBtn.addEventListener('click', () => doMove(true));
 
-    return { el: panel, refresh, note: setStatus };
+    return { el: panel, refresh, note: setStatus, isBusy: () => busy };
   }
 
   // --- Task mode: curtain panel below Project Tags -------------------------
@@ -337,7 +349,7 @@
   function initTaskMode(monogram) {
     const { el } = build({
       getTargets: () => [monogram],
-      removeOptions: readTagsFromDom(document),
+      removeOptions: readTagsFromDom(),
       showCount: false,
       onDone: () => location.reload(),
     });
@@ -365,96 +377,81 @@
   }
 
   function initBoardMode() {
-    const selected = new Set();
+    const selected = new Set();   // monograms; the only source of truth
     let api = null;
     let floatWrap = null;
+    let linger = false;           // keep the panel up briefly after a move
 
+    const cardsIn = (root) => [...root.querySelectorAll('.phui-workcard')];
     const monoOf = (card) => {
       const name = card.querySelector('.phui-oi-objname');
       if (name) return name.textContent.trim();
       const href = card.querySelector('a.phui-oi-link')?.getAttribute('href') || '';
       return (href.match(/\/(T\d+)/) || [])[1] || null;
     };
-
-    // Cards update themselves via the board's live refresh, so a move just
-    // clears local selection; the panel lingers briefly to show the result.
-    let doneTimer = null;
-    function onDone() {
-      document.querySelectorAll('.tcm-cb').forEach((cb) => { cb.checked = false; });
-      document.querySelectorAll('.phui-workcard.tcm-selected').forEach((c) => c.classList.remove('tcm-selected'));
-      selected.clear();
-      missingSince.clear();
-      document.body.classList.remove('tcm-selecting');
-      syncHeaders();
-      api.refresh();
-      clearTimeout(doneTimer);
-      doneTimer = setTimeout(() => { if (!selected.size) floatWrap.style.display = 'none'; }, 5000);
-    }
+    const monosIn = (root) => cardsIn(root).map(monoOf).filter(Boolean);
 
     function ensurePanel() {
       if (api) return;
       api = build({ getTargets: () => [...selected], removeOptions: boardRemoveOption(), showCount: true, onDone });
       floatWrap = Object.assign(document.createElement('div'), { className: 'tcm-float' });
-      floatWrap.style.display = 'none';
       floatWrap.appendChild(api.el);
       document.body.appendChild(floatWrap);
     }
 
-    // A column header checkbox mirrors its cards: checked if all are selected,
-    // indeterminate if only some.
-    function syncHeaders() {
+    // Everything visible is drawn from `selected`: card checkboxes, outlines,
+    // the header tri-states, and the panel. Cards rebuilt by Phabricator are
+    // therefore restored automatically on the next pass.
+    function render() {
+      const active = selected.size > 0;
+      cardsIn(document).forEach((card) => {
+        const mono = monoOf(card);
+        const on = !!mono && selected.has(mono);
+        const cb = card.querySelector('.tcm-cb');
+        if (cb) cb.checked = on;
+        card.classList.toggle('tcm-selected', on);
+      });
       document.querySelectorAll('.phui-workpanel-view').forEach((panel) => {
         const box = panel.querySelector('.tcm-selall');
         if (!box) return;
-        const boxes = [...panel.querySelectorAll('.phui-workcard .tcm-cb')];
-        const sel = boxes.filter((b) => b.checked).length;
-        box.checked = boxes.length > 0 && sel === boxes.length;
-        box.indeterminate = sel > 0 && sel < boxes.length;
+        const monos = monosIn(panel);
+        const n = monos.filter((m) => selected.has(m)).length;
+        box.checked = monos.length > 0 && n === monos.length;
+        box.indeterminate = n > 0 && n < monos.length;
       });
-    }
-
-    // A non-empty selection reveals every card's checkbox (via body class) and
-    // shows the panel; emptying it hides both again.
-    function update() {
-      const active = selected.size > 0;
       document.body.classList.toggle('tcm-selecting', active);
-      ensurePanel();
-      floatWrap.style.display = active ? '' : 'none';
-      syncHeaders();
-      api.refresh();
+      if (active) ensurePanel();
+      if (api) {
+        floatWrap.style.display = active || linger ? '' : 'none';
+        api.refresh();
+      }
     }
 
-    // Update selection state for one card without touching the UI; callers
-    // (checkbox change, select-all) call update() once when done.
-    function setSelected(card, checked) {
-      const mono = monoOf(card);
-      if (!mono) return;
-      if (checked) { selected.add(mono); card.classList.add('tcm-selected'); }
-      else { selected.delete(mono); card.classList.remove('tcm-selected'); }
+    // Cards update themselves via the board's live refresh, so a move only
+    // clears local selection; the panel lingers so the result stays readable.
+    let doneTimer = null;
+    function onDone() {
+      selected.clear();
+      missingSince.clear();
+      linger = true;
+      render();
+      clearTimeout(doneTimer);
+      doneTimer = setTimeout(() => { linger = false; api.note(''); render(); }, 5000);
     }
 
-    // Checkbox lives in the card's action list, so it inherits the same
-    // hover-reveal the edit pencil uses (see CSS).
     function injectCard(card) {
       if (card.querySelector('.tcm-cb')) return;
-      // Share the edit pencil's (position:relative) li so we can sit just below it.
+      // Share the edit pencil's li: sits just below it, same hover-reveal.
       const host = card.querySelector('li[data-sigil="edit-project-card"]') || card.querySelector('.phui-oi-actions');
       if (!host) return;
       const cb = Object.assign(document.createElement('input'), { type: 'checkbox', className: 'tcm-cb' });
-      // Cards are rebuilt on drag/filter/column reload with a fresh checkbox;
-      // the selection set is the source of truth, so restore from it.
-      const mono = monoOf(card);
-      if (mono && selected.has(mono)) { cb.checked = true; card.classList.add('tcm-selected'); }
       host.appendChild(cb);
-      cb.addEventListener('change', () => { setSelected(card, cb.checked); update(); });
-    }
-
-    // Select-all toggle in each column header: all -> none if already all set.
-    function selectAll(panel) {
-      const cards = [...panel.querySelectorAll('.phui-workcard')].filter((c) => c.querySelector('.tcm-cb'));
-      const want = !(cards.length && cards.every((c) => c.querySelector('.tcm-cb').checked));
-      cards.forEach((c) => { c.querySelector('.tcm-cb').checked = want; setSelected(c, want); });
-      update();
+      cb.addEventListener('change', () => {
+        const mono = monoOf(card);
+        if (!mono) return;
+        if (cb.checked) selected.add(mono); else selected.delete(mono);
+        render();
+      });
     }
 
     function injectHeader(panel) {
@@ -465,30 +462,35 @@
       cb.setAttribute('aria-label', 'Select all in column');
       li.appendChild(cb);
       list.appendChild(li);
-      // selectAll recomputes from the cards, so its own toggled value is
-      // irrelevant; syncHeaders() then sets checked/indeterminate correctly.
-      cb.addEventListener('change', () => selectAll(panel));
+      // Intent comes from the cards, not this box's toggled value; render()
+      // then sets its checked/indeterminate state correctly.
+      cb.addEventListener('change', () => {
+        const monos = monosIn(panel);
+        const want = !monos.every((m) => selected.has(m));
+        monos.forEach((m) => (want ? selected.add(m) : selected.delete(m)));
+        render();
+      });
     }
 
-    const injectAll = (root) => {
+    const inject = (root) => {
+      if (root.matches?.('.phui-workcard')) injectCard(root);
+      if (root.matches?.('.phui-workpanel-view')) injectHeader(root);
       root.querySelectorAll('.phui-workcard').forEach(injectCard);
       root.querySelectorAll('.phui-workpanel-view').forEach(injectHeader);
     };
-    injectAll(document);
+    inject(document);
 
     // A card vanishes briefly whenever Phabricator re-renders it, so absence is
-    // only meaningful if it persists: past the grace period it means the task
-    // actually left this board (someone else moved it).
+    // only meaningful if it persists: past the grace period the task really has
+    // left this board (someone else moved it).
     const GRACE_MS = 2500;
     const missingSince = new Map();
     let graceTimer = null;
 
     function pruneMissing() {
-      const present = new Set();
-      document.querySelectorAll('.phui-workcard').forEach((c) => {
-        const m = monoOf(c);
-        if (m) present.add(m);
-      });
+      // Our own in-flight moves remove cards; that is not someone else's edit.
+      if (api && api.isBusy()) return;
+      const present = new Set(monosIn(document));
       const now = Date.now();
       const dropped = [];
       for (const mono of selected) {
@@ -498,40 +500,37 @@
         else if (now - since >= GRACE_MS) { selected.delete(mono); missingSince.delete(mono); dropped.push(mono); }
       }
       clearTimeout(graceTimer);
-      if (missingSince.size) graceTimer = setTimeout(pruneMissing, GRACE_MS);
-      if (dropped.length) {
-        update();
-        if (api) api.note(`${dropped.join(', ')} left this board; deselected.`);
-      }
+      if (missingSince.size) graceTimer = setTimeout(() => { pruneMissing(); render(); }, GRACE_MS);
+      if (dropped.length && api) api.note(`${dropped.join(', ')} left this board; deselected.`);
     }
 
-    // Re-render churn can fire many mutations; coalesce the follow-up sync.
+    // Re-render churn fires many mutations; coalesce the follow-up pass.
     let pending = false;
     function resync() {
       if (pending) return;
       pending = true;
-      requestAnimationFrame(() => { pending = false; syncHeaders(); pruneMissing(); if (api) api.refresh(); });
+      requestAnimationFrame(() => { pending = false; pruneMissing(); render(); });
     }
 
-    // Columns/cards are rebuilt on drag/filter; keep injecting into fresh ones.
     new MutationObserver((muts) => {
-      for (const m of muts) for (const n of m.addedNodes) {
-        if (n.nodeType !== 1) continue;
-        if (n.matches?.('.phui-workcard')) injectCard(n);
-        if (n.matches?.('.phui-workpanel-view')) injectHeader(n);
-        injectAll(n);
-        resync();
+      let touched = false;
+      for (const m of muts) {
+        // The panel lives in <body> too; reacting to its own writes would loop.
+        if (floatWrap && floatWrap.contains(m.target)) continue;
+        touched = true;
+        for (const n of m.addedNodes) if (n.nodeType === 1) inject(n);
       }
+      if (touched) resync();
     }).observe(document.body, { childList: true, subtree: true });
 
-    // Keep checkbox interaction from reaching Javelin (no drag start, no card
-    // navigation); the checkbox's own toggle still fires. Capture runs before
-    // Stratcom's bubbling handlers.
+    // Keep checkbox interaction from reaching Javelin (no drag start, no edit
+    // action); the checkbox's own toggle still fires. Capture beats bubbling.
     ['mousedown', 'click'].forEach((type) =>
       document.addEventListener(type, (ev) => {
         if (ev.target.closest('.tcm-cb, .tcm-selall-li')) ev.stopPropagation();
       }, true));
   }
+
   // --- Dispatch ------------------------------------------------------------
 
   document.head.appendChild(Object.assign(document.createElement('style'), { textContent: css }));
