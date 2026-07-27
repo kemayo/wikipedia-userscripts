@@ -160,11 +160,16 @@
     .tcm-float { position:fixed; bottom:16px; right:16px; width:300px; z-index:1000;
       background:#fff; border:1px solid #c7ccd9; border-radius:4px;
       box-shadow:0 4px 16px rgba(0,0,0,.15); padding:2px 12px 12px; }
-    .phui-oi-actions .tcm-cb-li { display:none; float:right; width:20px; height:100%; position:relative; }
-    .device-desktop .phui-workcard.phui-oi:hover .tcm-cb-li,
-    body.tcm-selecting .phui-oi-actions .tcm-cb-li { display:inline-block; }
-    .tcm-cb { position:absolute; top:50%; left:2px; margin-top:-7px; cursor:pointer; }
+    .tcm-cb { display:none; cursor:pointer; }
+    .device-desktop .phui-workcard.phui-oi:hover .tcm-cb,
+    body.tcm-selecting .tcm-cb { display:block; }
+    /* Phab's input[type="checkbox"] rule outranks a bare class, so match it. */
+    input[type="checkbox"].tcm-cb { margin:1px 0 0 5px; }
     .phui-workcard.tcm-selected { outline:2px solid #3498db; outline-offset:-2px; }
+    .phui-header-action-list .tcm-selall-li { display:none; }
+    .phui-header-shell:hover .tcm-selall-li,
+    body.tcm-selecting .phui-header-action-list .tcm-selall-li { display:inline-block; }
+    .tcm-selall { cursor:pointer; vertical-align:middle; margin:0; }
   `;
 
   // config: { getTargets():[monogram], removeOptions:[{name,slug,pid}], showCount:bool }
@@ -314,8 +319,8 @@
           await applyMove(t, { removePHID, ownerPHID, columnPHID: colSel.value });
         }
         pushMru({ project: picked, columnPHID: colSel.value, columnName: colSel.selectedOptions[0].text });
-        setStatus('Done, reloading...', true);
-        location.reload();
+        setStatus(`Moved ${targets.length}.`, true);
+        config.onDone(targets.length);
       } catch (e) {
         setStatus(`${e.message} (stopped after ${done}/${targets.length})`);
         refresh();
@@ -324,7 +329,7 @@
     goBtn.addEventListener('click', () => doMove(false));
     assignBtn.addEventListener('click', () => doMove(true));
 
-    return { el: panel, refresh };
+    return { el: panel, refresh, note: setStatus };
   }
 
   // --- Task mode: curtain panel below Project Tags -------------------------
@@ -334,6 +339,7 @@
       getTargets: () => [monogram],
       removeOptions: readTagsFromDom(document),
       showCount: false,
+      onDone: () => location.reload(),
     });
 
     const tagsPanel = [...document.querySelectorAll('.phui-curtain-panel')].find(
@@ -370,13 +376,41 @@
       return (href.match(/\/(T\d+)/) || [])[1] || null;
     };
 
+    // Cards update themselves via the board's live refresh, so a move just
+    // clears local selection; the panel lingers briefly to show the result.
+    let doneTimer = null;
+    function onDone() {
+      document.querySelectorAll('.tcm-cb').forEach((cb) => { cb.checked = false; });
+      document.querySelectorAll('.phui-workcard.tcm-selected').forEach((c) => c.classList.remove('tcm-selected'));
+      selected.clear();
+      missingSince.clear();
+      document.body.classList.remove('tcm-selecting');
+      syncHeaders();
+      api.refresh();
+      clearTimeout(doneTimer);
+      doneTimer = setTimeout(() => { if (!selected.size) floatWrap.style.display = 'none'; }, 5000);
+    }
+
     function ensurePanel() {
       if (api) return;
-      api = build({ getTargets: () => [...selected], removeOptions: boardRemoveOption(), showCount: true });
+      api = build({ getTargets: () => [...selected], removeOptions: boardRemoveOption(), showCount: true, onDone });
       floatWrap = Object.assign(document.createElement('div'), { className: 'tcm-float' });
       floatWrap.style.display = 'none';
       floatWrap.appendChild(api.el);
       document.body.appendChild(floatWrap);
+    }
+
+    // A column header checkbox mirrors its cards: checked if all are selected,
+    // indeterminate if only some.
+    function syncHeaders() {
+      document.querySelectorAll('.phui-workpanel-view').forEach((panel) => {
+        const box = panel.querySelector('.tcm-selall');
+        if (!box) return;
+        const boxes = [...panel.querySelectorAll('.phui-workcard .tcm-cb')];
+        const sel = boxes.filter((b) => b.checked).length;
+        box.checked = boxes.length > 0 && sel === boxes.length;
+        box.indeterminate = sel > 0 && sel < boxes.length;
+      });
     }
 
     // A non-empty selection reveals every card's checkbox (via body class) and
@@ -386,41 +420,107 @@
       document.body.classList.toggle('tcm-selecting', active);
       ensurePanel();
       floatWrap.style.display = active ? '' : 'none';
+      syncHeaders();
       api.refresh();
     }
 
-    function onToggle(card, checked) {
+    // Update selection state for one card without touching the UI; callers
+    // (checkbox change, select-all) call update() once when done.
+    function setSelected(card, checked) {
       const mono = monoOf(card);
       if (!mono) return;
       if (checked) { selected.add(mono); card.classList.add('tcm-selected'); }
       else { selected.delete(mono); card.classList.remove('tcm-selected'); }
-      update();
     }
 
     // Checkbox lives in the card's action list, so it inherits the same
     // hover-reveal the edit pencil uses (see CSS).
-    function inject(card) {
+    function injectCard(card) {
       if (card.querySelector('.tcm-cb')) return;
-      let actions = card.querySelector('.phui-oi-actions');
-      if (!actions) {
-        actions = Object.assign(document.createElement('ul'), { className: 'phui-oi-actions' });
-        (card.querySelector('.phui-oi-frame-content') || card).appendChild(actions);
-      }
-      const li = Object.assign(document.createElement('li'), { className: 'phui-list-item-view tcm-cb-li' });
+      // Share the edit pencil's (position:relative) li so we can sit just below it.
+      const host = card.querySelector('li[data-sigil="edit-project-card"]') || card.querySelector('.phui-oi-actions');
+      if (!host) return;
       const cb = Object.assign(document.createElement('input'), { type: 'checkbox', className: 'tcm-cb' });
-      li.appendChild(cb);
-      actions.insertBefore(li, actions.firstChild);
-      cb.addEventListener('change', () => onToggle(card, cb.checked));
+      // Cards are rebuilt on drag/filter/column reload with a fresh checkbox;
+      // the selection set is the source of truth, so restore from it.
+      const mono = monoOf(card);
+      if (mono && selected.has(mono)) { cb.checked = true; card.classList.add('tcm-selected'); }
+      host.appendChild(cb);
+      cb.addEventListener('change', () => { setSelected(card, cb.checked); update(); });
     }
 
-    document.querySelectorAll('.phui-workcard').forEach(inject);
+    // Select-all toggle in each column header: all -> none if already all set.
+    function selectAll(panel) {
+      const cards = [...panel.querySelectorAll('.phui-workcard')].filter((c) => c.querySelector('.tcm-cb'));
+      const want = !(cards.length && cards.every((c) => c.querySelector('.tcm-cb').checked));
+      cards.forEach((c) => { c.querySelector('.tcm-cb').checked = want; setSelected(c, want); });
+      update();
+    }
 
-    // Cards are rebuilt on drag/filter; keep injecting into fresh ones.
+    function injectHeader(panel) {
+      const list = panel.querySelector('.phui-header-action-list');
+      if (!list || list.querySelector('.tcm-selall')) return;
+      const li = Object.assign(document.createElement('li'), { className: 'phui-header-action-item tcm-selall-li' });
+      const cb = Object.assign(document.createElement('input'), { type: 'checkbox', className: 'tcm-selall', title: 'Select all in column' });
+      cb.setAttribute('aria-label', 'Select all in column');
+      li.appendChild(cb);
+      list.appendChild(li);
+      // selectAll recomputes from the cards, so its own toggled value is
+      // irrelevant; syncHeaders() then sets checked/indeterminate correctly.
+      cb.addEventListener('change', () => selectAll(panel));
+    }
+
+    const injectAll = (root) => {
+      root.querySelectorAll('.phui-workcard').forEach(injectCard);
+      root.querySelectorAll('.phui-workpanel-view').forEach(injectHeader);
+    };
+    injectAll(document);
+
+    // A card vanishes briefly whenever Phabricator re-renders it, so absence is
+    // only meaningful if it persists: past the grace period it means the task
+    // actually left this board (someone else moved it).
+    const GRACE_MS = 2500;
+    const missingSince = new Map();
+    let graceTimer = null;
+
+    function pruneMissing() {
+      const present = new Set();
+      document.querySelectorAll('.phui-workcard').forEach((c) => {
+        const m = monoOf(c);
+        if (m) present.add(m);
+      });
+      const now = Date.now();
+      const dropped = [];
+      for (const mono of selected) {
+        if (present.has(mono)) { missingSince.delete(mono); continue; }
+        const since = missingSince.get(mono);
+        if (since === undefined) missingSince.set(mono, now);
+        else if (now - since >= GRACE_MS) { selected.delete(mono); missingSince.delete(mono); dropped.push(mono); }
+      }
+      clearTimeout(graceTimer);
+      if (missingSince.size) graceTimer = setTimeout(pruneMissing, GRACE_MS);
+      if (dropped.length) {
+        update();
+        if (api) api.note(`${dropped.join(', ')} left this board; deselected.`);
+      }
+    }
+
+    // Re-render churn can fire many mutations; coalesce the follow-up sync.
+    let pending = false;
+    function resync() {
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(() => { pending = false; syncHeaders(); pruneMissing(); if (api) api.refresh(); });
+    }
+
+    // Columns/cards are rebuilt on drag/filter; keep injecting into fresh ones.
     new MutationObserver((muts) => {
       for (const m of muts) for (const n of m.addedNodes) {
         if (n.nodeType !== 1) continue;
-        if (n.matches?.('.phui-workcard')) inject(n);
-        n.querySelectorAll?.('.phui-workcard').forEach(inject);
+        if (n.matches?.('.phui-workcard')) injectCard(n);
+        if (n.matches?.('.phui-workpanel-view')) injectHeader(n);
+        injectAll(n);
+        resync();
       }
     }).observe(document.body, { childList: true, subtree: true });
 
@@ -429,7 +529,7 @@
     // Stratcom's bubbling handlers.
     ['mousedown', 'click'].forEach((type) =>
       document.addEventListener(type, (ev) => {
-        if (ev.target.closest('.tcm-cb-li')) ev.stopPropagation();
+        if (ev.target.closest('.tcm-cb, .tcm-selall-li')) ev.stopPropagation();
       }, true));
   }
   // --- Dispatch ------------------------------------------------------------
