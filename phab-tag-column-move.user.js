@@ -154,7 +154,8 @@
     .tcm-mru .phabricator-handle-tag-list-item { cursor:pointer; }
     .tcm-del { color:#c0392b; cursor:pointer; font-size:11px; }
     .tcm-actions { display:flex; gap:6px; }
-    .tcm-status { margin-top:6px; font-size:12px; color:#c0392b; min-height:14px; }
+    .tcm-status { margin-top:6px; font-size:12px; color:#c0392b; }
+    .tcm-status:empty { display:none; }
   `;
 
   function build() {
