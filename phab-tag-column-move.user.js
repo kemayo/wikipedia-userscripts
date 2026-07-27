@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Phabricator: move tag + column in one step
-// @version      2026-07-22
+// @version      2026-07-26
 // @description  Quick move to a specific tag-with-column
 // @author       David Lynch
 // @namespace    davidlynch.org
@@ -10,9 +10,9 @@
 // ==/UserScript==
 
 // Adds a curtain panel below "Project Tags" that applies a single maniphest.edit:
-// optionally remove one current tag, and move the task into an arbitrary column
-// of any project. The `column` transaction auto-attaches the destination board,
-// so "leave sprint A, enter column Z of sprint B" is one atomic edit.
+// optionally remove one current tag, assign the task to you, and move it into an
+// arbitrary column of any project. The `column` transaction auto-attaches the
+// destination board, so "leave sprint A, enter column Z of sprint B" is one edit.
 //
 // Auth: session cookies + CSRF header, no stored API token. If Conduit rejects
 // the write with an auth (not CSRF) error, add `api.token` to conduit()'s body
@@ -93,11 +93,24 @@
     return r.data.map((d) => ({ phid: d.phid, name: d.fields.name, hidden: !!d.fields.isHidden }));
   }
 
-  async function applyMove(removePHID, columnPHID) {
+  async function applyMove({ removePHID, ownerPHID, columnPHID }) {
     const txns = [];
     if (removePHID) txns.push({ type: 'projects.remove', value: [removePHID] });
+    if (ownerPHID) txns.push({ type: 'owner', value: ownerPHID });
     txns.push({ type: 'column', value: columnPHID }); // auto-adds the board
     return conduit('maniphest.edit', { objectIdentifier: monogram, transactions: txns });
+  }
+
+  // Viewer PHID for "assign to me"; cached since it is constant per session.
+  async function viewerPHID() {
+    const KEY = 'phab-viewer-phid';
+    const cached = localStorage.getItem(KEY);
+    if (cached) return cached;
+    try {
+      const r = await conduit('user.whoami', {});
+      if (r && r.phid) { localStorage.setItem(KEY, r.phid); return r.phid; }
+    } catch (e) { /* user.whoami unavailable; the checkbox stays disabled */ }
+    return null;
   }
 
   // --- MRU (localStorage, per your preference) -----------------------------
@@ -111,6 +124,9 @@
     mru.unshift(entry);
     localStorage.setItem(MRU_KEY, JSON.stringify(mru.slice(0, MRU_MAX)));
   }
+  function removeMru(columnPHID) {
+    localStorage.setItem(MRU_KEY, JSON.stringify(loadMru().filter((e) => e.columnPHID !== columnPHID)));
+  }
 
   // Native list-item markup so rows match the Project Tags section exactly.
   function tagItem({ project: p, columnName }) {
@@ -118,25 +134,26 @@
     return `<li class="phabricator-handle-tag-list-item" title="Prefill this destination">`
       + `<span class="phui-tag-view phui-tag-type-shade phui-tag-${p.color} phui-tag-shade phui-tag-icon-view">`
       + `<span class="phui-tag-core">${icon}${p.name}</span></span> `
-      + `<span class="maniphest-board-link">(${columnName})</span></li>`;
+      + `<span class="maniphest-board-link">(${columnName})</span>`
+      + ` <span class="tcm-del" title="Remove from recent">[x]</span></li>`;
   }
 
   // --- UI ------------------------------------------------------------------
 
+  // Layout/labels/button reuse Phabricator's own form classes; this only covers
+  // input borders (not set in core CSS), the custom typeahead, and the status line.
   const css = `
-    .tcm-body label { display:block; margin:8px 0 2px; font-size:11px;
-      text-transform:uppercase; letter-spacing:.5px; color:#6b748c; }
-    .tcm-body select, .tcm-body input[type=text] { width:100%; box-sizing:border-box;
+    .tcm-body input[type=text], .tcm-body select { width:100%; box-sizing:border-box;
       padding:4px 6px; border:1px solid #c7ccd9; border-radius:3px; font-size:13px; }
-    .tcm-sugg { border:1px solid #c7ccd9; border-top:0; border-radius:0 0 3px 3px;
-      max-height:160px; overflow:auto; background:#fff; }
+    .tcm-body button.button[disabled] { opacity:.5; cursor:default; }
+    .tcm-body label.aphront-form-label { height:auto; line-height:1.2; }
+    .tcm-body .aphront-form-control { padding:2px 0; }
+    .tcm-sugg { border:1px solid #c7ccd9; border-top:0; max-height:160px; overflow:auto; background:#fff; }
     .tcm-sugg div { padding:4px 6px; cursor:pointer; font-size:13px; }
     .tcm-sugg div:hover { background:#eaf0ff; }
-    .tcm-mru { margin-top:8px; }
     .tcm-mru .phabricator-handle-tag-list-item { cursor:pointer; }
-    .tcm-go { margin-top:10px; width:100%; padding:5px; border:1px solid #3498db;
-      border-radius:3px; background:#3498db; color:#fff; cursor:pointer; font-size:13px; }
-    .tcm-go[disabled] { opacity:.5; cursor:default; }
+    .tcm-del { color:#c0392b; cursor:pointer; font-size:11px; }
+    .tcm-actions { display:flex; gap:6px; }
     .tcm-status { margin-top:6px; font-size:12px; color:#c0392b; min-height:14px; }
   `;
 
@@ -146,17 +163,40 @@
     panel.innerHTML = `
       <div class="phui-curtain-panel-header">Move tag + column</div>
       <div class="phui-curtain-panel-body tcm-body">
-        <label>Remove tag</label>
-        <select class="tcm-remove"><option value="">(keep all tags)</option></select>
-        <label>To board</label>
-        <input type="text" class="tcm-proj" placeholder="type a project name" autocomplete="off">
-        <div class="tcm-sugg" style="display:none"></div>
-        <label>Column</label>
-        <select class="tcm-col"><option value="">(pick a board first)</option></select>
-        <label class="tcm-mru-label" style="display:none">Recent</label>
-        <div class="tcm-mru"></div>
-        <button class="tcm-go" disabled>Move</button>
-        <div class="tcm-status"></div>
+        <div class="phui-form-view phui-form-full-width">
+          <div class="aphront-form-control aphront-form-control-select">
+            <label class="aphront-form-label">Remove tag</label>
+            <div class="aphront-form-input">
+              <select class="tcm-remove"><option value="">(keep all tags)</option></select>
+            </div>
+          </div>
+          <div class="aphront-form-control aphront-form-control-text">
+            <label class="aphront-form-label">To board</label>
+            <div class="aphront-form-input">
+              <input type="text" class="tcm-proj" placeholder="type a project name" autocomplete="off">
+              <div class="tcm-sugg" style="display:none"></div>
+            </div>
+          </div>
+          <div class="aphront-form-control aphront-form-control-select">
+            <label class="aphront-form-label">Column</label>
+            <div class="aphront-form-input">
+              <select class="tcm-col"><option value="">(pick a board first)</option></select>
+            </div>
+          </div>
+          <div class="aphront-form-control tcm-mru-control" style="display:none">
+            <label class="aphront-form-label">Recent</label>
+            <div class="aphront-form-input"><div class="tcm-mru"></div></div>
+          </div>
+          <div class="aphront-form-control">
+            <div class="aphront-form-input">
+              <div class="tcm-actions">
+                <button type="button" class="button tcm-go" disabled>Move</button>
+                <button type="button" class="button button-green tcm-go-assign" disabled>Move + assign</button>
+              </div>
+              <div class="tcm-status"></div>
+            </div>
+          </div>
+        </div>
       </div>
     `;
 
@@ -165,14 +205,23 @@
     const projInput = $('.tcm-proj');
     const sugg = $('.tcm-sugg');
     const colSel = $('.tcm-col');
-    const mruLabel = $('.tcm-mru-label');
+    const mruControl = $('.tcm-mru-control');
     const mruDiv = $('.tcm-mru');
     const goBtn = $('.tcm-go');
     const status = $('.tcm-status');
+    const assignBtn = $('.tcm-go-assign');
+
+    // "Move + assign" is enabled only once we can resolve the viewer's PHID.
+    let viewer = null;
+    viewerPHID().then((phid) => {
+      viewer = phid;
+      refreshGo();
+      if (!phid) assignBtn.title = 'Could not determine your user';
+    });
 
     let picked = null; // the chosen destination project, recorded into the MRU on submit
     const setStatus = (msg, ok) => { status.textContent = msg || ''; status.style.color = ok ? '#27ae60' : '#c0392b'; };
-    const refreshGo = () => { goBtn.disabled = !colSel.value; };
+    const refreshGo = () => { goBtn.disabled = !colSel.value; assignBtn.disabled = !colSel.value || !viewer; };
     const pick = (p) => { picked = p; projInput.value = p.name; };
 
     // Removal options straight from the DOM; no API call needed at load.
@@ -220,31 +269,35 @@
 
     colSel.addEventListener('change', refreshGo);
 
-    (function renderMru() {
+    function renderMru() {
       const mru = loadMru();
-      mruLabel.style.display = mru.length ? 'block' : 'none';
+      mruControl.style.display = mru.length ? '' : 'none';
       mruDiv.innerHTML = mru.length ? `<ul class="phabricator-handle-tag-list">${mru.map(tagItem).join('')}</ul>` : '';
       [...mruDiv.querySelectorAll('.phabricator-handle-tag-list-item')].forEach((el, i) => {
         el.onclick = () => { pick(mru[i].project); loadColumns(mru[i].project.phid, mru[i].columnPHID); };
+        el.querySelector('.tcm-del').onclick = (ev) => { ev.stopPropagation(); removeMru(mru[i].columnPHID); renderMru(); };
       });
-    })();
+    }
+    renderMru();
 
-    goBtn.addEventListener('click', async () => {
+    async function doMove(assign) {
       if (!colSel.value) return;
-      goBtn.disabled = true;
+      goBtn.disabled = assignBtn.disabled = true;
       setStatus('Applying...');
       try {
         const opt = removeSel.selectedOptions[0];
         const removePHID = opt && opt.value ? await resolvePHID(opt.dataset.slug, opt.dataset.pid) : null;
-        await applyMove(removePHID, colSel.value);
+        await applyMove({ removePHID, ownerPHID: assign ? viewer : null, columnPHID: colSel.value });
         pushMru({ project: picked, columnPHID: colSel.value, columnName: colSel.selectedOptions[0].text });
         setStatus('Done, reloading...', true);
         location.reload();
       } catch (e) {
         setStatus(e.message);
-        goBtn.disabled = false;
+        refreshGo();
       }
-    });
+    }
+    goBtn.addEventListener('click', () => doMove(false));
+    assignBtn.addEventListener('click', () => doMove(true));
 
     return panel;
   }
