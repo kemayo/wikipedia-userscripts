@@ -192,7 +192,7 @@
             <div class="aphront-form-input">
               <div class="tcm-actions">
                 <button type="button" class="button tcm-go" disabled>Move</button>
-                <button type="button" class="button button-green tcm-go-assign" disabled>Move + assign</button>
+                <button type="button" class="button button-green tcm-go-assign" disabled>Move + claim</button>
               </div>
               <div class="tcm-status"></div>
             </div>
