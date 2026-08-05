@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Phabricator: move tag + column in one step
-// @version      2026-07-27
+// @version      2026-08-05
 // @description  Quick move to a specific tag-with-column
 // @author       David Lynch
 // @namespace    davidlynch.org
@@ -153,7 +153,10 @@
     .tcm-sugg div:hover { background:#eaf0ff; }
     .tcm-mru .phabricator-handle-tag-list-item { cursor:pointer; }
     .tcm-del { color:#c0392b; cursor:pointer; font-size:11px; }
-    .tcm-actions { display:flex; gap:6px; }
+    .tcm-actions { display:flex; gap:8px; align-items:center; }
+    .tcm-claim-label { display:flex; align-items:center; gap:4px; cursor:pointer;
+      font-size:13px; text-transform:none; letter-spacing:normal; color:inherit; }
+    input[type="checkbox"].tcm-claim { margin:0; cursor:pointer; }
     .tcm-count { font-size:12px; color:#6b748c; margin:4px 0 2px; }
     .tcm-status { margin-top:6px; font-size:12px; color:#c0392b; }
     .tcm-status:empty { display:none; }
@@ -209,7 +212,7 @@
             <div class="aphront-form-input">
               <div class="tcm-actions">
                 <button type="button" class="button tcm-go" disabled>Move</button>
-                <button type="button" class="button button-green tcm-go-assign" disabled>Move + claim</button>
+                <label class="tcm-claim-label"><input type="checkbox" class="tcm-claim"> +claim</label>
               </div>
               <div class="tcm-status"></div>
             </div>
@@ -228,7 +231,8 @@
     const countEl = $('.tcm-count');
     const goBtn = $('.tcm-go');
     const status = $('.tcm-status');
-    const assignBtn = $('.tcm-go-assign');
+    const claimChk = $('.tcm-claim');
+    const claimLabel = $('.tcm-claim-label');
 
     if (config.showCount) countEl.style.display = '';
 
@@ -243,15 +247,15 @@
       const n = config.getTargets().length;
       if (config.showCount) setText(countEl, `${n} selected`);
       goBtn.disabled = busy || !colSel.value || !n;
-      assignBtn.disabled = busy || !colSel.value || !n || !viewer;
+      claimChk.disabled = busy || !viewer;
     };
 
-    // "Move + claim" is enabled only once we can resolve the viewer's PHID.
+    // "+claim" is available only once we can resolve the viewer's PHID.
     let viewer = null;
     viewerPHID().then((phid) => {
       viewer = phid;
       refresh();
-      if (!phid) assignBtn.title = 'Could not determine your user';
+      if (!phid) claimLabel.title = 'Could not determine your user';
     });
 
     // Removal options are supplied by the caller (task tags, or the board).
@@ -314,7 +318,7 @@
     }
     renderMru();
 
-    async function doMove(assign) {
+    async function doMove() {
       const targets = config.getTargets();
       if (busy || !colSel.value || !targets.length) return;
       busy = true;
@@ -323,7 +327,7 @@
       try {
         const opt = removeSel.selectedOptions[0];
         const removePHID = opt && opt.value ? await resolvePHID(opt.dataset.slug, opt.dataset.pid) : null;
-        const ownerPHID = assign ? viewer : null;
+        const ownerPHID = claimChk.checked ? viewer : null;
         for (const t of targets) {
           setStatus(`Applying ${++done}/${targets.length}...`);
           await applyMove(t, { removePHID, ownerPHID, columnPHID: colSel.value });
@@ -338,8 +342,7 @@
         refresh();
       }
     }
-    goBtn.addEventListener('click', () => doMove(false));
-    assignBtn.addEventListener('click', () => doMove(true));
+    goBtn.addEventListener('click', doMove);
 
     return { el: panel, refresh, note: setStatus, isBusy: () => busy };
   }
