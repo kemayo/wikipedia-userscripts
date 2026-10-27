@@ -15,7 +15,8 @@
 // checkbox on each card; checking any card reveals every card's checkbox and a
 // floating panel that loops the edit over the selected set. Each edit is a
 // single maniphest.edit: optionally remove one tag, assign to you, and move into
-// an arbitrary column. The `column` transaction auto-attaches the destination board.
+// an arbitrary column. The destination board is tagged explicitly, since a bare
+// `column` move into a board's default column is dropped as a no-op.
 //
 // Auth: session cookies + CSRF header, no stored API token. If Conduit rejects
 // the write with an auth (not CSRF) error, add `api.token` to conduit()'s body
@@ -42,7 +43,9 @@
       },
       body: new URLSearchParams({ params: JSON.stringify(params), output: 'json' }),
     });
-    const json = await res.json();
+    let json;
+    try { json = await res.json(); }
+    catch { throw new Error(`HTTP ${res.status} from ${method}: not JSON (session expired?)`); }
     if (json.error_code) throw new Error(`${json.error_code}: ${json.error_info}`);
     return json.result;
   }
@@ -58,7 +61,7 @@
       if (!a) return;
       const href = a.getAttribute('href') || '';
       let m, slug = null, pid = null;
-      if ((m = href.match(/^\/tag\/([^/]+)\//))) slug = m[1];
+      if ((m = href.match(/^\/tag\/([^/]+)\//))) slug = decodeURIComponent(m[1]);
       else if ((m = href.match(/\/project\/(?:view|board)\/(\d+)/))) pid = m[1];
       if (slug || pid) out.push({ name: a.textContent.trim(), slug, pid });
     });
@@ -113,22 +116,24 @@
     return conduit('maniphest.edit', { objectIdentifier: target, transactions: txns });
   }
 
-  // Viewer PHID for "claim"; cached since it is constant per session.
-  async function viewerPHID() {
-    const KEY = 'phab-viewer-phid';
-    const cached = localStorage.getItem(KEY);
-    if (cached) return cached;
-    try {
-      const r = await conduit('user.whoami', {});
-      if (r && r.phid) { localStorage.setItem(KEY, r.phid); return r.phid; }
-    } catch (e) { /* user.whoami unavailable; the claim button stays disabled */ }
-    return null;
+  // Viewer PHID for "+claim", resolved lazily and only kept for this page: a
+  // persisted PHID would silently claim as the wrong account after switching.
+  let viewerPromise = null;
+  function viewerPHID() {
+    if (!viewerPromise) {
+      viewerPromise = conduit('user.whoami', {}).then((r) => {
+        if (!r || !r.phid) throw new Error('Could not determine your user.');
+        return r.phid;
+      });
+      viewerPromise.catch(() => { viewerPromise = null; }); // allow a retry
+    }
+    return viewerPromise;
   }
 
   // --- MRU (localStorage, per your preference) -----------------------------
 
   function loadMru() {
-    try { return JSON.parse(localStorage.getItem(MRU_KEY)) || []; }
+    try { return (JSON.parse(localStorage.getItem(MRU_KEY)) || []).filter((e) => e && e.project && e.columnPHID); }
     catch { return []; }
   }
   function pushMru(entry) {
@@ -141,13 +146,26 @@
   }
 
   // Native list-item markup so rows match the Project Tags section exactly.
+  // Built with DOM APIs, not innerHTML: project and column names are
+  // user-controlled and would otherwise be injected into the page.
   function tagItem({ project: p, columnName }) {
-    const icon = p.icon ? `<span class="visual-only phui-icon-view phui-font-fa ${p.icon}"></span>` : '';
-    return `<li class="phabricator-handle-tag-list-item" title="Prefill this destination">`
-      + `<span class="phui-tag-view phui-tag-type-shade phui-tag-${p.color} phui-tag-shade phui-tag-icon-view">`
-      + `<span class="phui-tag-core">${icon}${p.name}</span></span> `
-      + `<span class="maniphest-board-link">(${columnName})</span>`
-      + ` <span class="tcm-del" title="Remove from recent">[x]</span></li>`;
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      e.className = cls;
+      if (text) e.textContent = text;
+      return e;
+    };
+    const core = el('span', 'phui-tag-core');
+    if (p.icon) core.appendChild(el('span', `visual-only phui-icon-view phui-font-fa ${p.icon}`));
+    core.appendChild(document.createTextNode(p.name));
+    const tag = el('span', `phui-tag-view phui-tag-type-shade phui-tag-${p.color} phui-tag-shade phui-tag-icon-view`);
+    tag.appendChild(core);
+    const del = el('span', 'tcm-del', '[x]');
+    del.title = 'Remove from recent';
+    const li = el('li', 'phabricator-handle-tag-list-item');
+    li.title = 'Prefill this destination';
+    li.append(tag, ' ', el('span', 'maniphest-board-link', `(${columnName})`), ' ', del);
+    return li;
   }
 
   // --- UI ------------------------------------------------------------------
@@ -188,7 +206,7 @@
     input[type="checkbox"].tcm-selall { cursor:pointer; vertical-align:middle; }
   `;
 
-  // config: { getTargets():[monogram], removeOptions:[{name,slug,pid}], showCount:bool }
+  // config: { getTargets():[monogram], removeOptions:[{name,slug,pid}], showCount:bool, onDone(n) }
   function build(config) {
     const panel = document.createElement('div');
     panel.className = 'phui-curtain-panel';
@@ -244,7 +262,6 @@
     const goBtn = $('.tcm-go');
     const status = $('.tcm-status');
     const claimChk = $('.tcm-claim');
-    const claimLabel = $('.tcm-claim-label');
 
     if (config.showCount) countEl.style.display = '';
 
@@ -253,22 +270,17 @@
     // Writes are guarded: the board observer treats any DOM change as a cue to
     // re-render, so an unconditional write here would feed back into itself.
     const setText = (el, text) => { if (el.textContent !== text) el.textContent = text; };
-    const setStatus = (msg, ok) => { setText(status, msg || ''); status.style.color = ok ? '#27ae60' : '#c0392b'; };
+    const setStatus = (msg, ok) => {
+      setText(status, msg || '');
+      status.style.color = ok === true ? '#27ae60' : ok === false ? '#c0392b' : '#6b748c';
+    };
     const pick = (p) => { picked = p; projInput.value = p.name; };
     const refresh = () => {
       const n = config.getTargets().length;
       if (config.showCount) setText(countEl, `${n} selected`);
       goBtn.disabled = busy || !colSel.value || !n;
-      claimChk.disabled = busy || !viewer;
+      claimChk.disabled = busy;
     };
-
-    // "+claim" is available only once we can resolve the viewer's PHID.
-    let viewer = null;
-    viewerPHID().then((phid) => {
-      viewer = phid;
-      refresh();
-      if (!phid) claimLabel.title = 'Could not determine your user';
-    });
 
     // Removal options are supplied by the caller (task tags, or the board).
     config.removeOptions.forEach((t) => {
@@ -277,10 +289,16 @@
       removeSel.add(o);
     });
 
+    // Sequence numbers drop responses superseded by a newer pick or query.
+    let colSeq = 0;
+    let searchSeq = 0;
+
     async function loadColumns(projPHID, preselect) {
+      const seq = ++colSeq;
       colSel.innerHTML = '<option value="">loading...</option>';
       try {
         const cols = await columnsFor(projPHID);
+        if (seq !== colSeq) return;
         colSel.innerHTML = '<option value="">(pick a column)</option>';
         cols.forEach((c) => {
           const o = new Option(c.hidden ? `${c.name} (hidden)` : c.name, c.phid);
@@ -290,7 +308,8 @@
         });
         if (preselect) colSel.value = preselect;
       } catch (e) {
-        setStatus(`Couldn't load columns: ${e.message}`);
+        if (seq !== colSeq) return;
+        setStatus(`Couldn't load columns: ${e.message}`, false);
       }
       refresh();
     }
@@ -298,6 +317,8 @@
     let debounce;
     projInput.addEventListener('input', () => {
       picked = null;
+      colSeq++;
+      const seq = ++searchSeq;
       colSel.innerHTML = '<option value="">(pick a board first)</option>';
       refresh();
       clearTimeout(debounce);
@@ -306,6 +327,7 @@
       debounce = setTimeout(async () => {
         try {
           const hits = await searchProjects(text);
+          if (seq !== searchSeq) return;
           sugg.innerHTML = '';
           hits.forEach((p) => {
             const d = document.createElement('div');
@@ -314,7 +336,7 @@
             sugg.appendChild(d);
           });
           sugg.style.display = hits.length ? 'block' : 'none';
-        } catch (e) { setStatus(e.message); }
+        } catch (e) { if (seq === searchSeq) setStatus(e.message, false); }
       }, 250);
     });
 
@@ -327,11 +349,16 @@
     function renderMru() {
       const mru = loadMru();
       mruControl.style.display = mru.length ? '' : 'none';
-      mruDiv.innerHTML = mru.length ? `<ul class="phabricator-handle-tag-list">${mru.map(tagItem).join('')}</ul>` : '';
-      [...mruDiv.querySelectorAll('.phabricator-handle-tag-list-item')].forEach((el, i) => {
-        el.onclick = () => { pick(mru[i].project); loadColumns(mru[i].project.phid, mru[i].columnPHID); };
-        el.querySelector('.tcm-del').onclick = (ev) => { ev.stopPropagation(); removeMru(mru[i].columnPHID); renderMru(); };
+      mruDiv.textContent = '';
+      if (!mru.length) return;
+      const ul = Object.assign(document.createElement('ul'), { className: 'phabricator-handle-tag-list' });
+      mru.forEach((entry) => {
+        const li = tagItem(entry);
+        li.onclick = () => { pick(entry.project); loadColumns(entry.project.phid, entry.columnPHID); };
+        li.querySelector('.tcm-del').onclick = (ev) => { ev.stopPropagation(); removeMru(entry.columnPHID); renderMru(); };
+        ul.appendChild(li);
       });
+      mruDiv.appendChild(ul);
     }
     renderMru();
 
@@ -344,26 +371,27 @@
       try {
         const opt = removeSel.selectedOptions[0];
         const removePHID = opt && opt.value ? await resolvePHID(opt.dataset.slug, opt.dataset.pid) : null;
-        const ownerPHID = claimChk.checked ? viewer : null;
+        const ownerPHID = claimChk.checked ? await viewerPHID() : null;
         const colOpt = colSel.selectedOptions[0];
         const addPHID = colOpt.dataset.proxy ? null : colOpt.dataset.board || null;
         // Conduit reports success even when every transaction was a no-op;
         // an empty applied list is the only signal.
         const unchanged = [];
         for (const t of targets) {
-          setStatus(`Applying ${++done}/${targets.length}...`);
+          setStatus(`Applying ${done + 1}/${targets.length}...`);
           const r = await applyMove(t, { removePHID, ownerPHID, columnPHID: colSel.value, addPHID });
+          done++;
           if (!r.transactions || !r.transactions.length) unchanged.push(t);
         }
         const moved = targets.length - unchanged.length;
-        if (moved) pushMru({ project: picked, columnPHID: colSel.value, columnName: colOpt.text });
+        if (moved && picked) pushMru({ project: picked, columnPHID: colSel.value, columnName: colOpt.text });
         busy = false;
-        if (unchanged.length) setStatus(`Moved ${moved}; no change for ${unchanged.join(', ')}.`);
+        if (unchanged.length) setStatus(`Moved ${moved}; no change for ${unchanged.join(', ')}.`, false);
         else setStatus(`Moved ${moved}.`, true);
         if (moved) config.onDone(moved);
         else refresh();
       } catch (e) {
-        setStatus(`${e.message} (stopped after ${done}/${targets.length})`);
+        setStatus(`${e.message} (stopped after ${done}/${targets.length})`, false);
         busy = false;
         refresh();
       }
@@ -401,7 +429,7 @@
   function boardRemoveOption() {
     let m;
     if ((m = location.pathname.match(/\/project\/board\/(\d+)/))) return [{ name: 'this board', pid: m[1] }];
-    if ((m = location.pathname.match(/^\/tag\/([^/]+)\//))) return [{ name: 'this board', slug: m[1] }];
+    if ((m = location.pathname.match(/^\/tag\/([^/]+)\//))) return [{ name: 'this board', slug: decodeURIComponent(m[1]) }];
     return [];
   }
 
@@ -530,7 +558,7 @@
       }
       clearTimeout(graceTimer);
       if (missingSince.size) graceTimer = setTimeout(() => { pruneMissing(); render(); }, GRACE_MS);
-      if (dropped.length && api) api.note(`${dropped.join(', ')} left this board; deselected.`);
+      if (dropped.length && api) api.note(`${dropped.join(', ')} left this board; deselected.`, false);
     }
 
     // Re-render churn fires many mutations; coalesce the follow-up pass.
