@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Phabricator: move tag + column in one step
-// @version      2026-08-05
+// @version      2026-10-27
 // @description  Quick move to a specific tag-with-column
 // @author       David Lynch
 // @namespace    davidlynch.org
@@ -90,14 +90,26 @@
 
   async function columnsFor(projPHID) {
     const r = await conduit('project.column.search', { constraints: { projects: [projPHID] }, limit: 100 });
-    return r.data.map((d) => ({ phid: d.phid, name: d.fields.name, hidden: !!d.fields.isHidden }));
+    return r.data.map((d) => ({
+      phid: d.phid,
+      name: d.fields.name,
+      hidden: !!d.fields.isHidden,
+      boardPHID: (d.fields.project && d.fields.project.phid) || null,
+      proxyPHID: d.fields.proxyPHID || null,
+    }));
   }
 
-  async function applyMove(target, { removePHID, ownerPHID, columnPHID }) {
+  // A column move alone is dropped as a no-op when the target is the board's
+  // default column and the task isn't on that board yet (layout places
+  // unpositioned tasks in the default column), so tag the board explicitly.
+  // Proxy (milestone/subproject) columns are left alone: tagging the parent
+  // there would pull the task out of the milestone.
+  async function applyMove(target, { removePHID, ownerPHID, columnPHID, addPHID }) {
     const txns = [];
-    if (removePHID) txns.push({ type: 'projects.remove', value: [removePHID] });
+    if (removePHID && removePHID !== addPHID) txns.push({ type: 'projects.remove', value: [removePHID] });
+    if (addPHID) txns.push({ type: 'projects.add', value: [addPHID] });
     if (ownerPHID) txns.push({ type: 'owner', value: ownerPHID });
-    txns.push({ type: 'column', value: columnPHID }); // auto-adds the board
+    txns.push({ type: 'column', value: columnPHID });
     return conduit('maniphest.edit', { objectIdentifier: target, transactions: txns });
   }
 
@@ -270,7 +282,12 @@
       try {
         const cols = await columnsFor(projPHID);
         colSel.innerHTML = '<option value="">(pick a column)</option>';
-        cols.forEach((c) => colSel.add(new Option(c.hidden ? `${c.name} (hidden)` : c.name, c.phid)));
+        cols.forEach((c) => {
+          const o = new Option(c.hidden ? `${c.name} (hidden)` : c.name, c.phid);
+          if (c.boardPHID) o.dataset.board = c.boardPHID;
+          if (c.proxyPHID) o.dataset.proxy = c.proxyPHID;
+          colSel.add(o);
+        });
         if (preselect) colSel.value = preselect;
       } catch (e) {
         setStatus(`Couldn't load columns: ${e.message}`);
@@ -328,14 +345,23 @@
         const opt = removeSel.selectedOptions[0];
         const removePHID = opt && opt.value ? await resolvePHID(opt.dataset.slug, opt.dataset.pid) : null;
         const ownerPHID = claimChk.checked ? viewer : null;
+        const colOpt = colSel.selectedOptions[0];
+        const addPHID = colOpt.dataset.proxy ? null : colOpt.dataset.board || null;
+        // Conduit reports success even when every transaction was a no-op;
+        // an empty applied list is the only signal.
+        const unchanged = [];
         for (const t of targets) {
           setStatus(`Applying ${++done}/${targets.length}...`);
-          await applyMove(t, { removePHID, ownerPHID, columnPHID: colSel.value });
+          const r = await applyMove(t, { removePHID, ownerPHID, columnPHID: colSel.value, addPHID });
+          if (!r.transactions || !r.transactions.length) unchanged.push(t);
         }
-        pushMru({ project: picked, columnPHID: colSel.value, columnName: colSel.selectedOptions[0].text });
-        setStatus(`Moved ${targets.length}.`, true);
+        const moved = targets.length - unchanged.length;
+        if (moved) pushMru({ project: picked, columnPHID: colSel.value, columnName: colOpt.text });
         busy = false;
-        config.onDone(targets.length);
+        if (unchanged.length) setStatus(`Moved ${moved}; no change for ${unchanged.join(', ')}.`);
+        else setStatus(`Moved ${moved}.`, true);
+        if (moved) config.onDone(moved);
+        else refresh();
       } catch (e) {
         setStatus(`${e.message} (stopped after ${done}/${targets.length})`);
         busy = false;
